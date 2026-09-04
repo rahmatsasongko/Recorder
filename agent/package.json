@@ -1,0 +1,15 @@
+{
+  "name": "cypress-recorder-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local runner for the Cypress Recorder browser extension.",
+  "bin": {
+    "cypress-recorder-agent": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cypress": "^15.21.1"
+  }
+}

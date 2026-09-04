@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Cypress Recorder Extension",
+  "version": "0.3.0",
+  "description": "Record website activity and convert it into Cypress tests with Page Object Model structure.",
+  "permissions": ["storage", "tabs", "scripting", "downloads", "activeTab"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Cypress Recorder",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js", "content/player.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

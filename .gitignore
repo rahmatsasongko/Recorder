@@ -1,0 +1,10 @@
+node_modules/
+agent/node_modules/
+agent/package-lock.json
+*.log
+
+# Cypress agent workspace lives in the user home dir, but just in case:
+.cypress-recorder-agent/
+cypress/videos/
+cypress/screenshots/
+cypress/downloads/
