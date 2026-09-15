@@ -5,7 +5,8 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 const ACTIONS = [
   "visit", "click", "type", "clear", "select",
-  "check", "uncheck", "keydown", "submit", "scroll", "upload", "assert"
+  "check", "uncheck", "keydown", "submit", "scroll", "upload",
+  "drag", "drop", "resize", "assert"
 ];
 const ASSERTIONS = [
   { v: "visible", t: "be visible" },
@@ -18,9 +19,18 @@ const ASSERTIONS = [
 let pollTimer = null;
 let editingIndex = -1;
 let generated = null;
+let codeSource = "suite"; // "suite" (active session) | "project" (all suites combined)
+let generatedSuitesRaw = null; // [{ id, suiteName, ... }] backing the last "project" generation, for Play all
 let activeCodeTab = "spec";
 let activeFile = null;
 let pendingImport = null; // { files } while the spec picker is shown
+let framework = window.Generators.DEFAULT_ID; // cypress | playwright | webdriverio
+
+// The renderer for the framework currently selected in the sidebar. Recording
+// and playback never look at this — only code generation does.
+function gen() {
+  return window.Generators.get(framework);
+}
 
 /* ------------------------------ messaging ------------------------------ */
 
@@ -46,13 +56,13 @@ function getLastPlay() {
 /* ------------------------------ views ------------------------------ */
 
 const STEP_OF_VIEW = {
+  "view-suites": 0,
   "view-setup": 0,
   "view-recording": 1,
   "view-suite": 2,
   "view-scenario": 2,
   "view-play": 3,
-  "view-code": 3,
-  "view-run": 3
+  "view-code": 3
 };
 
 function updateStepper(active) {
@@ -68,7 +78,6 @@ function showView(id) {
   updateStepper(id in STEP_OF_VIEW ? STEP_OF_VIEW[id] : 0);
   if (id === "view-recording") startPolling();
   else stopPolling();
-  if (id !== "view-run") stopRunPoll();
   if (id !== "view-play") stopPlayPoll();
 }
 function setFoot(m) {
@@ -149,6 +158,166 @@ $("#btn-stop").addEventListener("click", async () => {
   openScenario(session.recordingIndex);
 });
 
+/* ------------------------------ suites library ------------------------------ */
+
+function fmtWhen(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return min + "m ago";
+  const hr = Math.round(min / 60);
+  if (hr < 24) return hr + "h ago";
+  return Math.round(hr / 24) + "d ago";
+}
+
+async function enterSuitesList() {
+  showView("view-suites");
+  const res = await send("LIST_SUITES");
+  renderSuitesList((res && res.suites) || [], res && res.activeSuiteId);
+}
+
+function renderSuitesList(suites, activeId) {
+  const list = $("#suites-list");
+  $("#suites-empty").style.display = suites.length ? "none" : "block";
+  list.innerHTML = suites
+    .map((s, i) => {
+      const isActive = s.id === activeId;
+      return `
+      <div class="scn${isActive ? " current" : ""}" data-id="${escapeAttr(s.id)}">
+        <span class="num">${i + 1}</span>
+        <span class="meta" data-op="open">
+          <div class="nm">${escapeHtml(s.suiteName || "Untitled suite")}</div>
+          <div class="sub">
+            <span>${escapeHtml(s.projectName || "")}</span>
+            <span>${s.scenarioCount} scenario${s.scenarioCount === 1 ? "" : "s"}</span>
+            ${isActive ? '<span class="chip recorded">current</span>' : s.updatedAt ? `<span>${fmtWhen(s.updatedAt)}</span>` : ""}
+          </div>
+        </span>
+        <span class="tools">
+          <button class="icon-btn gen" data-op="gen" title="Generate Cypress code">⚙</button>
+          <button class="icon-btn play" data-op="open" title="Open this suite">→</button>
+          <button class="icon-btn del" data-op="del" title="Delete suite">🗑</button>
+        </span>
+      </div>`;
+    })
+    .join("");
+}
+
+$("#suites-list").addEventListener("click", async (e) => {
+  const row = e.target.closest(".scn");
+  if (!row) return;
+  const id = row.dataset.id;
+  const op = e.target.closest("[data-op]")?.dataset.op;
+  if (op === "del") {
+    await send("DELETE_SUITE", { id });
+    enterSuitesList();
+    return;
+  }
+  if (op === "gen") {
+    setFoot("Preparing Cypress code…");
+    const res = await send("SWITCH_SUITE", { id });
+    if (!res.ok) {
+      setFoot("Could not open that suite");
+      return;
+    }
+    const session = await getSession();
+    if (session && session.active) {
+      // Mid-recording — nothing to generate yet, land on the recording view
+      // like the plain "open" action does.
+      showView("view-recording");
+      return;
+    }
+    if (!session || !(session.scenarios || []).some((s) => (s.steps || []).length)) {
+      setFoot("This suite has no recorded steps yet");
+      enterSuite();
+      return;
+    }
+    generated = gen().generateFiles(session);
+    generatedSuitesRaw = null;
+    activeFile = null;
+    setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
+    setCodeSource("suite");
+    activeCodeTab = "spec";
+    syncTabs();
+    showView("view-code");
+    return;
+  }
+  setFoot("Opening suite…");
+  const res = await send("SWITCH_SUITE", { id });
+  if (!res.ok) {
+    setFoot("Could not open that suite");
+    return;
+  }
+  setFoot("Suite opened");
+  const session = await getSession();
+  if (session && session.active) showView("view-recording");
+  else enterSuite();
+});
+
+$("#btn-suites").addEventListener("click", enterSuitesList);
+$("#btn-add-suite").addEventListener("click", () => {
+  $("#setup-error").textContent = "";
+  showView("view-setup");
+});
+
+/* ---------------------- bulk export / import (all suites) ---------------------- */
+
+async function exportAllSuites() {
+  const res = await send("EXPORT_ALL_SUITES");
+  const suites = (res && res.suites) || [];
+  if (!res.ok || !suites.length) {
+    setFoot("No suites to export");
+    return;
+  }
+  const bundle = {
+    kind: "cypress-recorder-suite-bundle",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    suites
+  };
+  const json = JSON.stringify(bundle, null, 2);
+  const filename = "cypress-recorder-suites-" + suites.length + ".json";
+  try {
+    const dataUrl = await blobToDataUrl(new Blob([json], { type: "application/json" }));
+    if (chrome.downloads && chrome.downloads.download) {
+      chrome.downloads.download({ url: dataUrl, filename }, () => void chrome.runtime.lastError);
+    } else {
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    setFoot("Exported " + suites.length + " suite(s)");
+  } catch (e) {
+    setFoot("Export failed: " + e.message);
+  }
+}
+
+async function handleImportAllFile(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const list = Array.isArray(data) ? data : data && Array.isArray(data.suites) ? data.suites : null;
+    if (!list) throw new Error("bukan file bundle suite yang valid");
+    const res = await send("IMPORT_ALL_SUITES", { suites: list });
+    if (!res.ok) throw new Error(res.reason || "import gagal");
+    setFoot("Imported " + res.added + " suite(s)");
+    enterSuitesList();
+  } catch (e) {
+    setFoot("Import gagal: " + (e && e.message ? e.message : e));
+  }
+}
+
+$("#btn-export-suites").addEventListener("click", exportAllSuites);
+$("#btn-import-suites").addEventListener("click", () => $("#import-suites-file").click());
+$("#import-suites-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (file) await handleImportAllFile(file);
+});
+
 /* ------------------------------ suite hub ------------------------------ */
 
 async function enterSuite() {
@@ -203,6 +372,7 @@ $("#scenario-list").addEventListener("click", async (e) => {
     await send("DELETE_SCENARIO", { index: i });
     enterSuite();
   } else if (op === "play") {
+    lastPlayQueueEntries = null;
     startPlayback({ mode: "one", index: i });
   } else {
     openScenario(i);
@@ -247,9 +417,11 @@ function escapeAttr(s) {
   return String(s).replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
+const DRAG_ACTIONS = ["drag", "drop", "resize"];
+
 function badgeClass(action) {
   if (action === "visit" || action === "scroll") return "nav";
-  if (action === "click") return "click";
+  if (action === "click" || DRAG_ACTIONS.includes(action)) return "click";
   if (action === "assert") return "assert";
   return "input";
 }
@@ -260,6 +432,13 @@ function previewOf(step) {
   }
   if (step.action === "visit" || step.action === "scroll")
     return step.url || step.value || "";
+  if (step.action === "drop") {
+    return "→ " + (step.targetName || step.targetSelector || "?");
+  }
+  if (step.action === "resize" || step.action === "drag") {
+    const drag = `${Number(step.dx) || 0}, ${Number(step.dy) || 0} px`;
+    return step.action === "resize" && step.value ? `${drag} → ${step.value}` : drag;
+  }
   if (step.value != null && step.value !== "") return String(step.value);
   return step.selector || "";
 }
@@ -298,7 +477,18 @@ function renderSteps(steps) {
         <input class="fld-avalue" type="text" value="${escapeAttr(
           (step.assertion && step.assertion.value) || ""
         )}" placeholder="text / path" />`
-        : `
+        : step.action === "drop"
+          ? `
+        <label>Drop on</label>
+        <input class="fld-target" type="text" value="${escapeAttr(step.targetSelector || "")}" placeholder="target selector" />`
+          : step.action === "resize" || step.action === "drag"
+            ? // The drag distance is what replays; the size it produced is a label.
+              `
+        <label>Drag X (px)</label>
+        <input class="fld-dx" type="number" value="${Number(step.dx) || 0}" />
+        <label>Drag Y (px)</label>
+        <input class="fld-dy" type="number" value="${Number(step.dy) || 0}" />`
+            : `
         <label>Value</label>
         <input class="fld-value" type="text" value="${escapeAttr(
           step.value == null ? "" : step.value
@@ -374,7 +564,19 @@ $("#steps-list").addEventListener("change", (e) => {
     else if (e.target.classList.contains("fld-selector")) s.selector = e.target.value;
     else if (e.target.classList.contains("fld-url")) s.url = e.target.value;
     else if (e.target.classList.contains("fld-value")) s.value = e.target.value;
-    else if (e.target.classList.contains("fld-assert")) {
+    else if (e.target.classList.contains("fld-target")) {
+      s.targetSelector = e.target.value;
+    } else if (
+      e.target.classList.contains("fld-dx") ||
+      e.target.classList.contains("fld-dy")
+    ) {
+      const axis = e.target.classList.contains("fld-dx") ? "dx" : "dy";
+      s[axis] = Math.round(Number(e.target.value) || 0);
+      // The recorded end size described the original drag, not this one.
+      s.value = "";
+      s.width = 0;
+      s.height = 0;
+    } else if (e.target.classList.contains("fld-assert")) {
       s.assertion = s.assertion || {};
       s.assertion.type = e.target.value;
     } else if (e.target.classList.contains("fld-avalue")) {
@@ -421,11 +623,65 @@ $("#btn-scenario-back").addEventListener("click", async () => {
   enterSuite();
 });
 
+/* ------------------------------ framework ------------------------------ */
+
+// Only code generation is framework-specific: the recording, the scenario
+// editor and in-browser playback all work off the recorded steps and behave
+// identically whichever button is lit here.
+function syncFrameworkUi() {
+  const g = gen();
+  $$("#fw-switch .fw").forEach((b) =>
+    b.classList.toggle("active", b.dataset.fw === framework)
+  );
+  $("#btn-generate").textContent = "⚙ Generate " + g.label;
+  $("#btn-generate-all").textContent = "⚙ Generate " + g.label + " — all suites combined";
+  $("#code-title").textContent = "Generated " + g.label;
+}
+
+async function setFramework(id) {
+  if (!window.Generators.byId[id] || id === framework) return;
+  framework = id;
+  await saveSettings({ framework: id });
+  syncFrameworkUi();
+
+  // Re-render whatever is already on screen in the newly picked framework,
+  // so the switch reads as "show me this suite as Playwright".
+  if (!$("#view-code").classList.contains("active")) {
+    generated = null;
+    return;
+  }
+  if (codeSource === "project" && generatedSuitesRaw) {
+    generated = gen().generateProjectFiles(generatedSuitesRaw);
+  } else {
+    const session = await getSession();
+    if (!session || !(session.scenarios || []).some((s) => (s.steps || []).length)) return;
+    generated = gen().generateFiles(session);
+  }
+  activeFile = null; // file paths differ per framework
+  syncTabs();
+  setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
+}
+
+$("#fw-switch").addEventListener("click", (e) => {
+  const btn = e.target.closest(".fw");
+  if (btn) setFramework(btn.dataset.fw);
+});
+
 /* ------------------------------ generate + code ------------------------------ */
 
 async function hasSteps() {
   const session = await getSession();
   return session && (session.scenarios || []).some((s) => (s.steps || []).length);
+}
+
+// "suite" -> code came from the active session, so Play and Export act on it.
+// "project" -> code is every saved suite merged into one repo, and Play chains
+// through each suite in turn.
+function setCodeSource(mode) {
+  codeSource = mode;
+  const isProject = mode === "project";
+  $("#btn-play-2").title = isProject ? "Play every suite in this project, one after another" : "";
+  syncFrameworkUi();
 }
 
 $("#btn-generate").addEventListener("click", async () => {
@@ -434,20 +690,56 @@ $("#btn-generate").addEventListener("click", async () => {
     setFoot("Record at least one step first");
     return;
   }
-  generated = window.CypressGen.generateFiles(session);
-  setFoot("Generated " + Object.keys(generated.files).length + " files");
+  generated = gen().generateFiles(session);
+  generatedSuitesRaw = null;
+  activeFile = null;
+  setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
+  setCodeSource("suite");
   activeCodeTab = "spec";
   syncTabs();
   showView("view-code");
 });
 
+$("#btn-generate-all").addEventListener("click", async () => {
+  const res = await send("EXPORT_ALL_SUITES");
+  const suites = ((res && res.suites) || []).filter((s) =>
+    (s.scenarios || []).some((sc) => (sc.steps || []).length)
+  );
+  if (!suites.length) {
+    setFoot("No recorded steps in any suite yet");
+    return;
+  }
+  generated = gen().generateProjectFiles(suites);
+  if (!generated.files || !Object.keys(generated.files).length) {
+    setFoot("Nothing to generate");
+    return;
+  }
+  generatedSuitesRaw = suites;
+  activeFile = null;
+  setFoot(
+    "Generated " +
+      Object.keys(generated.files).length +
+      " " +
+      gen().label +
+      " files from " +
+      suites.length +
+      " suite(s)"
+  );
+  setCodeSource("project");
+  activeCodeTab = "spec";
+  syncTabs();
+  showView("view-code");
+});
+
+// Every framework lays its Page Object Model out the same way, so only the
+// spec extension differs (.cy.js vs .spec.js).
 function filesForTab(tab) {
   const p = Object.keys(generated.files);
-  if (tab === "spec") return p.filter((x) => x.endsWith(".cy.js"));
-  if (tab === "page") return p.filter((x) => x.includes("/pages/"));
-  if (tab === "locator") return p.filter((x) => x.includes("/locator/"));
-  if (tab === "message") return p.filter((x) => x.includes("/messages/"));
-  if (tab === "data") return p.filter((x) => x.includes("/data/"));
+  if (tab === "spec") return p.filter((x) => x.endsWith(gen().specSuffix));
+  if (tab === "page") return p.filter((x) => x.includes("pages/"));
+  if (tab === "locator") return p.filter((x) => x.includes("locator/"));
+  if (tab === "message") return p.filter((x) => x.includes("messages/"));
+  if (tab === "data") return p.filter((x) => x.includes("data/"));
   return p;
 }
 
@@ -516,7 +808,10 @@ $("#btn-copy").addEventListener("click", async () => {
     setFoot("Copy failed");
   }
 });
-$("#btn-code-back").addEventListener("click", () => enterSuite());
+$("#btn-code-back").addEventListener("click", () => {
+  if (codeSource === "project") enterSuitesList();
+  else enterSuite();
+});
 
 /* ------------------------------ export ------------------------------ */
 
@@ -535,18 +830,10 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function exportProject() {
-  const session = await getSession();
-  if (!(await hasSteps())) {
-    setFoot("Nothing to export");
-    return;
-  }
-  const { files } = window.CypressGen.generateFiles(session);
-  const root = safeName(session.projectName || session.suiteName);
+async function exportFilesAsZip(files, rootLabel) {
+  const root = safeName(rootLabel);
   const prefixed = {};
   Object.keys(files).forEach((p) => (prefixed[root + "/" + p] = files[p]));
-  // Tuck the raw session into the ZIP so the whole thing can be re-imported.
-  prefixed[root + "/.cypress-recorder/session.json"] = JSON.stringify(session, null, 2);
   const blob = window.makeZip(prefixed);
   const filename = root + ".zip";
   try {
@@ -566,8 +853,36 @@ async function exportProject() {
     setFoot("Export failed: " + e.message);
   }
 }
+
+async function exportProject() {
+  const session = await getSession();
+  if (!(await hasSteps())) {
+    setFoot("Nothing to export");
+    return;
+  }
+  const { files } = gen().generateFiles(session);
+  // Tuck the raw session into the ZIP so the whole thing can be re-imported.
+  // The folder name is part of the import contract — don't rename it.
+  const filesWithSession = {
+    ...files,
+    ".cypress-recorder/session.json": JSON.stringify(session, null, 2)
+  };
+  await exportFilesAsZip(filesWithSession, session.projectName || session.suiteName);
+}
+
+async function exportGeneratedProject() {
+  if (!generated || !generated.files || !Object.keys(generated.files).length) {
+    setFoot("Nothing to export");
+    return;
+  }
+  await exportFilesAsZip(generated.files, generated.projectName || "cypress-project");
+}
+
 $("#btn-export-1").addEventListener("click", exportProject);
-$("#btn-export-2").addEventListener("click", exportProject);
+$("#btn-export-2").addEventListener("click", () => {
+  if (codeSource === "project") return exportGeneratedProject();
+  return exportProject();
+});
 
 /* ------------------------------ session import / export ------------------------------ */
 
@@ -677,9 +992,7 @@ async function installSession(session) {
   const res = await send("IMPORT_SESSION", { session });
   if (!res.ok) throw new Error(res.reason || "format tidak dikenali");
   generated = null;
-  currentRunId = null;
   lastPlayArgs = null;
-  stopRunPoll();
   stopPlayPoll();
   setFoot(
     "Imported “" + (res.suiteName || "session") + "” — " + (res.scenarios || 0) + " scenario(s)"
@@ -790,6 +1103,7 @@ $("#import-file").addEventListener("change", async (e) => {
 
 let playPollTimer = null;
 let lastPlayArgs = null;
+let lastPlayQueueEntries = null; // last "play every suite" list, for Play again
 
 function stopPlayPoll() {
   if (playPollTimer) clearInterval(playPollTimer);
@@ -800,9 +1114,37 @@ async function startPlayback(args) {
   const res = await send("PLAY_START", args);
   if (!res.ok) {
     setFoot(res.reason ? "Can't play: " + res.reason : "Can't play");
-    return;
+    return false;
   }
   lastPlayArgs = args;
+  $("#play-summary").style.display = "none";
+  $("#play-summary").innerHTML = "";
+  $("#play-steps").innerHTML = "";
+  $("#btn-play-again").style.display = "none";
+  $("#btn-play-stop").style.display = "";
+  showView("view-play");
+  startPlayPoll();
+  return true;
+}
+
+// Plays every given suite in turn, in the browser. The chain itself runs
+// entirely in the background service worker (PLAY_SUITES_START), because
+// Chrome closes this popup the instant the recorded tab takes focus — the
+// same reason a single suite's own multi-scenario playback already lives in
+// background.js instead of here. This function only kicks the chain off and
+// starts polling PLAY_STATE, whose `suiteQueue` field reports progress.
+async function startPlayAllSuites(entries) {
+  if (!entries || !entries.length) {
+    setFoot("Nothing to play");
+    return;
+  }
+  const res = await send("PLAY_SUITES_START", { entries });
+  if (!res.ok) {
+    setFoot(res.reason ? "Can't play: " + res.reason : "Can't play");
+    return;
+  }
+  lastPlayQueueEntries = entries;
+  lastPlayArgs = null;
   $("#play-summary").style.display = "none";
   $("#play-summary").innerHTML = "";
   $("#play-steps").innerHTML = "";
@@ -842,10 +1184,13 @@ async function renderPlayback() {
     const end = pb.finishedAt || Date.now();
     $("#play-elapsed").textContent = ((end - pb.startedAt) / 1000).toFixed(1) + "s";
   }
+  const queue = pb.suiteQueue;
   $("#play-title").textContent =
-    plan.length > 1
-      ? `Playing ${plan.length} scenarios`
-      : "Playing: " + (pb.scenarioName || "scenario");
+    queue && queue.entries && queue.entries.length
+      ? `Suite ${Math.min(queue.idx + 1, queue.entries.length)}/${queue.entries.length}: ${(queue.entries[queue.idx] || {}).name || ""}`
+      : plan.length > 1
+        ? `Playing ${plan.length} scenarios`
+        : "Playing: " + (pb.scenarioName || "scenario");
 
   const byKey = {};
   results.forEach((r) => {
@@ -895,12 +1240,20 @@ async function renderPlayback() {
   const running = $("#play-steps .play-step.running");
   if (running) running.scrollIntoView({ block: "nearest" });
 
-  if (!pb.active && pb.status && pb.status !== "idle") {
+  // While a suite queue is still active, background.js has already (or is
+  // about to) start the next suite's playback — keep polling rather than
+  // treating this suite's own finish as the end of the whole run.
+  if (!pb.active && pb.status && pb.status !== "idle" && !(queue && queue.active)) {
     stopPlayPoll();
     $("#btn-play-stop").style.display = "none";
     $("#btn-play-again").style.display = "";
-    renderPlaySummary(pb);
-    setFoot("Playback " + pb.status);
+    if (queue && queue.summaries && queue.summaries.length) {
+      renderMultiPlaySummary(queue.summaries);
+      setFoot("Playback finished — " + queue.summaries.length + " suite(s)");
+    } else {
+      renderPlaySummary(pb);
+      setFoot("Playback " + pb.status);
+    }
   }
 }
 
@@ -919,7 +1272,7 @@ function renderPlaySummary(pb) {
   const skipNote = skipped
     ? failed
       ? `${skipped} step${skipped === 1 ? "" : "s"} skipped (after the failure, or can't run in-browser).`
-      : `${skipped} step${skipped === 1 ? "" : "s"} skipped — can't run in the browser (e.g. file upload). Use “Run via agent”.`
+      : `${skipped} step${skipped === 1 ? "" : "s"} skipped — can't run in the browser (e.g. file upload). They are still in the exported project.`
     : "";
   box.innerHTML = `
     <div class="run-banner ${cls}"><span class="big">${icon}</span> ${label}</div>
@@ -932,29 +1285,85 @@ function renderPlaySummary(pb) {
     ${skipNote ? `<div class="hint">${skipNote}</div>` : ""}`;
 }
 
-$("#btn-play-all").addEventListener("click", () => startPlayback({ mode: "all" }));
-$("#btn-play-2").addEventListener("click", () => startPlayback({ mode: "all" }));
+function renderMultiPlaySummary(summaries) {
+  const box = $("#play-summary");
+  box.style.display = "block";
+  if (!summaries.length) {
+    box.innerHTML = `<div class="run-banner err"><span class="big">■</span> STOPPED</div>`;
+    return;
+  }
+  const anyFailed = summaries.some((s) => s.status === "failed" || s.status === "error");
+  const totalPassed = summaries.reduce((n, s) => n + (s.passed || 0), 0);
+  const totalFailed = summaries.reduce((n, s) => n + (s.failed || 0), 0);
+  const cls = anyFailed ? "fail" : "pass";
+  const icon = anyFailed ? "✕" : "✓";
+  const label = anyFailed ? "SOME SUITES FAILED" : "ALL SUITES PASSED";
+  const rows = summaries
+    .map((s) => {
+      const ricon =
+        s.status === "passed" ? "✓" : s.status === "stopped" ? "■" : s.status === "error" ? "⚠" : "✕";
+      const tail =
+        s.status === "error"
+          ? "could not run"
+          : `${s.passed || 0} passed${s.failed ? ", " + s.failed + " failed" : ""}`;
+      return `<div class="play-scn-head">${ricon} ${escapeHtml(s.name)} — ${tail}</div>`;
+    })
+    .join("");
+  box.innerHTML = `
+    <div class="run-banner ${cls}"><span class="big">${icon}</span> ${label}</div>
+    <div class="run-grid">
+      <div class="cell"><div class="k">Suites</div><div class="v">${summaries.length}</div></div>
+      <div class="cell"><div class="k">Passed steps</div><div class="v">${totalPassed}</div></div>
+      <div class="cell"><div class="k">Failed steps</div><div class="v">${totalFailed}</div></div>
+    </div>
+    ${rows}`;
+}
+
+$("#btn-play-all").addEventListener("click", () => {
+  lastPlayQueueEntries = null;
+  startPlayback({ mode: "all" });
+});
+$("#btn-play-2").addEventListener("click", () => {
+  if (codeSource === "project") {
+    if (!generatedSuitesRaw || !generatedSuitesRaw.length) {
+      setFoot("Nothing to play");
+      return;
+    }
+    startPlayAllSuites(generatedSuitesRaw.map((s) => ({ id: s.id, name: s.suiteName || "Suite" })));
+    return;
+  }
+  lastPlayQueueEntries = null;
+  startPlayback({ mode: "all" });
+});
 $("#btn-play-scenario").addEventListener("click", async () => {
+  lastPlayQueueEntries = null;
   await saveScenarioName();
   startPlayback({ mode: "one", index: editingIndex });
 });
 $("#btn-play-stop").addEventListener("click", async () => {
+  // Stopping mid-chain ends the whole run — background.js records this
+  // suite's partial result and won't advance to the next one.
   await send("PLAY_STOP");
   renderPlayback();
 });
 $("#btn-play-again").addEventListener("click", () => {
+  if (lastPlayQueueEntries) {
+    startPlayAllSuites(lastPlayQueueEntries);
+    return;
+  }
   if (lastPlayArgs) startPlayback(lastPlayArgs);
 });
 $("#btn-play-back").addEventListener("click", () => {
   stopPlayPoll();
+  if (codeSource === "project") {
+    showView("view-code");
+    syncTabs();
+    return;
+  }
   enterSuite();
 });
 
-/* ------------------------------ run automation ------------------------------ */
-
-const DEFAULT_AGENT = "http://127.0.0.1:47654";
-let runPollTimer = null;
-let currentRunId = null;
+/* ------------------------------ settings ------------------------------ */
 
 function getSettings() {
   return new Promise((r) =>
@@ -966,253 +1375,16 @@ function saveSettings(patch) {
     (s) => new Promise((r) => chrome.storage.local.set({ settings: { ...s, ...patch } }, r))
   );
 }
-function agentUrl() {
-  return ($("#agentUrl").value.trim() || DEFAULT_AGENT).replace(/\/+$/, "");
-}
-async function fetchJson(url, opts, timeoutMs) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
-  try {
-    const res = await fetch(url, { ...(opts || {}), signal: ctrl.signal });
-    const body = await res.json().catch(() => ({}));
-    return { ok: res.ok, status: res.status, body };
-  } finally {
-    clearTimeout(t);
-  }
-}
-function setAgentBadge(state, text) {
-  const b = $("#agent-badge");
-  b.className = "agent-badge " + state;
-  b.textContent = text;
-}
-async function checkAgent() {
-  setAgentBadge("checking", "checking…");
-  $("#agent-hint").textContent = "";
-  try {
-    const { ok, body } = await fetchJson(agentUrl() + "/health", {}, 3000);
-    if (ok && body.ok) {
-      if (!body.cypressInstalled) {
-        setAgentBadge("offline", "no cypress");
-        $("#agent-hint").textContent =
-          "Agent is up but Cypress isn't installed — run `npm install` in the agent folder.";
-        return false;
-      }
-      setAgentBadge("online", "connected");
-      $("#agent-hint").textContent = "Agent v" + body.version + (body.busy ? " · busy" : " · ready");
-      return true;
-    }
-    throw new Error("bad");
-  } catch (e) {
-    setAgentBadge("offline", "offline");
-    $("#agent-hint").innerHTML =
-      "Can't reach the agent. Start it: <code>cd agent &amp;&amp; npm install &amp;&amp; npm start</code>";
-    return false;
-  }
-}
-async function enterRun() {
-  const s = await getSettings();
-  $("#agentUrl").value = s.agentUrl || DEFAULT_AGENT;
-  $("#runEnv").value = s.runEnv || "";
-  $("#run-progress").style.display = "none";
-  $("#run-result").style.display = "none";
-  showView("view-run");
-  const up = await checkAgent();
-  if (up && s.lastRunId) {
-    currentRunId = s.lastRunId;
-    const r = await fetchJson(agentUrl() + "/run/" + currentRunId, {}, 5000).catch(() => null);
-    if (r && r.ok && r.body && r.body.status) {
-      if (["passed", "failed", "error"].includes(r.body.status)) renderRunResult(r.body);
-      else pollRun();
-    } else {
-      currentRunId = null;
-      await saveSettings({ lastRunId: null });
-    }
-  }
-}
-function parseEnv() {
-  const raw = $("#runEnv").value.trim();
-  if (!raw) return {};
-  return JSON.parse(raw);
-}
-async function runViaAgent() {
-  const session = await getSession();
-  if (!(await hasSteps())) {
-    $("#agent-hint").textContent = "No recorded steps to run.";
-    return;
-  }
-  let env;
-  try {
-    env = parseEnv();
-  } catch (e) {
-    $("#agent-hint").textContent = "Cypress env is not valid JSON.";
-    return;
-  }
-  await saveSettings({ agentUrl: agentUrl(), runEnv: $("#runEnv").value.trim() });
-  if (!(await checkAgent())) return;
-
-  const { model, files } = window.CypressGen.generateFiles(session);
-
-  $("#run-result").style.display = "none";
-  $("#run-progress").style.display = "block";
-  $("#run-phase").textContent = "Uploading project…";
-  $("#run-log").textContent = "";
-  $("#btn-run-now").disabled = true;
-  $("#btn-run-again").disabled = true;
-
-  try {
-    const { ok, status, body } = await fetchJson(
-      agentUrl() + "/run",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectName: session.projectName,
-          suiteName: session.suiteName,
-          baseUrl: model.baseUrl,
-          files,
-          env
-        })
-      },
-      20000
-    );
-    if (!ok) {
-      $("#run-phase").textContent = "Agent error: " + (body.error || status);
-      $("#btn-run-now").disabled = false;
-      $("#btn-run-again").disabled = false;
-      return;
-    }
-    currentRunId = body.runId;
-    await saveSettings({ lastRunId: currentRunId });
-    $("#run-phase").textContent = "Running Cypress…";
-    pollRun();
-  } catch (e) {
-    $("#run-phase").textContent = "Failed to start run: " + e.message;
-    $("#btn-run-now").disabled = false;
-    $("#btn-run-again").disabled = false;
-  }
-}
-function stopRunPoll() {
-  if (runPollTimer) clearInterval(runPollTimer);
-  runPollTimer = null;
-}
-function pollRun() {
-  stopRunPoll();
-  const tick = async () => {
-    if (!currentRunId) return stopRunPoll();
-    let data;
-    try {
-      const r = await fetchJson(agentUrl() + "/run/" + currentRunId, {}, 8000);
-      if (!r.ok) {
-        $("#run-phase").textContent = "Run not found on agent.";
-        stopRunPoll();
-        currentRunId = null;
-        await saveSettings({ lastRunId: null });
-        $("#btn-run-now").disabled = false;
-        $("#btn-run-again").disabled = false;
-        return;
-      }
-      data = r.body;
-    } catch (e) {
-      $("#run-phase").textContent = "Lost connection to agent…";
-      return;
-    }
-    $("#run-progress").style.display = "block";
-    $("#run-log").textContent = (data.log || []).join("\n");
-    $("#run-log").scrollTop = $("#run-log").scrollHeight;
-    $("#run-elapsed").textContent = data.elapsed ? " " + (data.elapsed / 1000).toFixed(0) + "s" : "";
-    const phaseMap = {
-      preparing: "Preparing…",
-      running: "Running Cypress…",
-      passed: "Passed",
-      failed: "Failed",
-      error: "Error"
-    };
-    $("#run-phase").textContent = phaseMap[data.status] || data.status;
-    if (["passed", "failed", "error"].includes(data.status)) {
-      stopRunPoll();
-      $("#btn-run-now").disabled = false;
-      $("#btn-run-again").disabled = false;
-      renderRunResult(data);
-    }
-  };
-  tick();
-  runPollTimer = setInterval(tick, 2000);
-}
-function esc(s) {
-  return String(s == null ? "" : s).replace(
-    /[&<>]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])
-  );
-}
-function renderRunResult(data) {
-  $("#run-progress").style.display = "none";
-  const box = $("#run-result");
-  box.style.display = "block";
-
-  if (data.status === "error") {
-    $("#run-summary").innerHTML = `<div class="run-banner err"><span class="big">⚠</span> ${esc(
-      data.error || "Run error"
-    )}</div>`;
-    $("#run-specs").innerHTML = `<pre class="code">${esc((data.log || []).join("\n"))}</pre>`;
-    return;
-  }
-  const r = data.result || {};
-  const pass = data.status === "passed";
-  $("#run-summary").innerHTML = `
-    <div class="run-banner ${pass ? "pass" : "fail"}">
-      <span class="big">${pass ? "✓" : "✕"}</span> ${pass ? "PASSED" : "FAILED"}
-    </div>
-    <div class="run-grid">
-      <div class="cell"><div class="k">Duration</div><div class="v">${((r.duration || 0) / 1000).toFixed(1)}s</div></div>
-      <div class="cell"><div class="k">Tests</div><div class="v">${r.totalTests || 0}</div></div>
-      <div class="cell"><div class="k">Passed</div><div class="v">${r.passed || 0}</div></div>
-      <div class="cell"><div class="k">Failed</div><div class="v">${r.failed || 0}</div></div>
-      <div class="cell"><div class="k">Browser</div><div class="v">${esc(r.browser || "electron")}</div></div>
-      <div class="cell"><div class="k">Cypress</div><div class="v">${esc(r.cypressVersion || "-")}</div></div>
-    </div>`;
-
-  const base = agentUrl() + "/run/" + currentRunId + "/file?path=";
-  $("#run-specs").innerHTML = (r.specs || [])
-    .map((sp) => {
-      const tests = sp.tests
-        .map(
-          (t) => `
-        <div class="test-line">
-          <span class="st ${t.state}">${t.state === "passed" ? "✓" : t.state === "failed" ? "✕" : "•"}</span>
-          <span>${esc(t.title)}${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</span>
-        </div>`
-        )
-        .join("");
-      const shots = (sp.screenshots || [])
-        .map((p) => `<img src="${base}${encodeURIComponent(p)}" alt="screenshot" />`)
-        .join("");
-      const video = sp.video
-        ? `<video controls src="${base}${encodeURIComponent(sp.video)}"></video>`
-        : "";
-      return `<div class="spec-block"><h4>${esc(sp.spec)}</h4>${tests}${
-        shots || video ? `<div class="shots">${shots}${video}</div>` : ""
-      }</div>`;
-    })
-    .join("");
-}
-
-$("#btn-run-1").addEventListener("click", enterRun);
-$("#btn-run-2").addEventListener("click", enterRun);
-$("#btn-run-back").addEventListener("click", () => enterSuite());
-$("#btn-agent-recheck").addEventListener("click", checkAgent);
-$("#btn-run-now").addEventListener("click", runViaAgent);
-$("#btn-run-again").addEventListener("click", runViaAgent);
 
 /* ------------------------------ reset ------------------------------ */
 
 $("#btn-reset").addEventListener("click", async () => {
   await send("PLAY_STOP");
   await send("RESET");
-  await saveSettings({ lastRunId: null });
   generated = null;
-  currentRunId = null;
+  generatedSuitesRaw = null;
+  codeSource = "suite";
   lastPlayArgs = null;
-  stopRunPoll();
   stopPlayPoll();
   $("#setup-error").textContent = "";
   renderImportReport(null);
@@ -1228,6 +1400,12 @@ $("#btn-reset").addEventListener("click", async () => {
 /* ------------------------------ boot ------------------------------ */
 
 async function boot() {
+  const settings = await getSettings();
+  if (settings.framework && window.Generators.byId[settings.framework]) {
+    framework = settings.framework;
+  }
+  syncFrameworkUi();
+
   const session = await getSession();
   if (session) {
     $("#projectName").value = session.projectName || "";
@@ -1249,6 +1427,15 @@ async function boot() {
   }
   if (session && (session.scenarios || []).length) {
     enterSuite();
+    return;
+  }
+
+  // Nothing currently open — offer the suite library instead of a blank
+  // form when there's something in it to come back to.
+  const res = await send("LIST_SUITES");
+  if (res && res.suites && res.suites.length) {
+    showView("view-suites");
+    renderSuitesList(res.suites, res.activeSuiteId);
     return;
   }
   showView("view-setup");

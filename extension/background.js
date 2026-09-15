@@ -53,6 +53,237 @@ async function setPlayback(playback) {
   return playback;
 }
 
+// Tracks a "play every suite" run across suite switches. Lives in storage
+// (not a popup-side variable) so the chain survives the popup closing —
+// which Chrome does the moment the recorded tab takes focus — exactly like
+// single-suite playback already survives it via `playback` + runPlayback().
+async function getSuiteQueue() {
+  const { suitePlayQueue } = await chrome.storage.local.get("suitePlayQueue");
+  return suitePlayQueue || null;
+}
+
+async function setSuiteQueue(queue) {
+  await chrome.storage.local.set({ suitePlayQueue: queue });
+  return queue;
+}
+
+// The suite library — every suite the user has started or switched away
+// from, so opening a new one never silently discards the last one.
+// Each entry is a persisted snapshot: { id, projectName, suiteName,
+// targetUrl, scenarios, updatedAt }. Runtime-only fields (active, tabId,
+// recordingIndex, ...) live solely on `session`, which always mirrors
+// whichever suite (if any) is currently open — tracked by `activeSuiteId`.
+
+async function getSuites() {
+  const { suites } = await chrome.storage.local.get("suites");
+  return Array.isArray(suites) ? suites : [];
+}
+
+async function setSuites(suites) {
+  await chrome.storage.local.set({ suites });
+  return suites;
+}
+
+async function getActiveSuiteId() {
+  const { activeSuiteId } = await chrome.storage.local.get("activeSuiteId");
+  return activeSuiteId || null;
+}
+
+async function setActiveSuiteId(id) {
+  await chrome.storage.local.set({ activeSuiteId: id || null });
+}
+
+// Upserts the current session's suite fields into the library under
+// activeSuiteId. No-op while nothing is tracked (e.g. before the first
+// suite is ever created). Call this before replacing/leaving `session` so
+// in-progress work is never lost.
+async function syncActiveSuite(session) {
+  const activeId = await getActiveSuiteId();
+  if (!activeId) return;
+  const suites = await getSuites();
+  const idx = suites.findIndex((s) => s.id === activeId);
+  const snapshot = {
+    id: activeId,
+    projectName: session.projectName,
+    suiteName: session.suiteName,
+    targetUrl: session.targetUrl,
+    scenarios: session.scenarios,
+    updatedAt: Date.now()
+  };
+  if (idx === -1) suites.push(snapshot);
+  else suites[idx] = snapshot;
+  await setSuites(suites);
+}
+
+// Loads suite `id` as the active session. Shared by the SWITCH_SUITE message
+// handler and the multi-suite play queue (which switches suites itself
+// between runs, entirely inside the service worker).
+async function doSwitchSuite(id) {
+  const session = await getSession();
+  const activeIdNow = await getActiveSuiteId();
+  if (id && id === activeIdNow) {
+    // Already open — nothing to do (and re-reading it below would clobber
+    // unsaved edits with the last-synced snapshot).
+    return { ok: true };
+  }
+  const suites = await getSuites();
+  const target = suites.find((s) => s.id === id);
+  if (!target) {
+    return { ok: false, reason: "suite not found" };
+  }
+  playGen++;
+  if (session.active && session.tabId != null) {
+    try {
+      await chrome.tabs.sendMessage(session.tabId, {
+        type: "STATE_CHANGED",
+        recording: false
+      });
+    } catch (e) {
+      /* tab gone / not ready */
+    }
+  }
+  // Save the suite being left before swapping it out.
+  await syncActiveSuite(session);
+
+  const loaded = {
+    ...DEFAULT_SESSION,
+    projectName: target.projectName,
+    suiteName: target.suiteName,
+    targetUrl: target.targetUrl,
+    scenarios: target.scenarios || [],
+    recordingIndex: -1
+  };
+  await setActiveSuiteId(target.id);
+  await setSession(loaded);
+  await chrome.storage.local.set({
+    playback: { ...DEFAULT_PLAYBACK },
+    lastPlay: {}
+  });
+  return { ok: true };
+}
+
+// Starts playback for the CURRENT active session. Shared by the PLAY_START
+// message handler (fresh, single-suite request from the popup — clears any
+// leftover suite queue) and the multi-suite play queue (fromQueue: true —
+// the queue itself owns starting one suite after another).
+async function doPlayStart(mode, index, opts) {
+  opts = opts || {};
+  const session = await getSession();
+  const scenarios = session.scenarios || [];
+  const m = mode === "all" ? "all" : "one";
+
+  let order;
+  if (m === "all") {
+    order = scenarios.map((s, i) => i).filter((i) => (scenarios[i].steps || []).length);
+  } else {
+    const i = index;
+    if (i == null || !scenarios[i] || !(scenarios[i].steps || []).length) {
+      return { ok: false, reason: "no steps to play" };
+    }
+    order = [i];
+  }
+  if (!order.length) {
+    return { ok: false, reason: "nothing to play" };
+  }
+
+  if (!opts.fromQueue) await setSuiteQueue(null);
+
+  playGen++;
+  const myGen = playGen;
+
+  let tabId = session.tabId;
+  if (tabId != null) {
+    try {
+      await chrome.tabs.get(tabId);
+    } catch (e) {
+      tabId = null;
+    }
+  }
+  const startUrl = firstUrlOf(scenarios[order[0]]) || session.targetUrl;
+  if (tabId == null) {
+    const tab = await chrome.tabs.create({ url: startUrl || "about:blank" });
+    tabId = tab.id;
+  }
+
+  const pb = {
+    ...DEFAULT_PLAYBACK,
+    active: true,
+    status: "running",
+    tabId,
+    mode: m,
+    plan: order.slice(),
+    queue: order.slice(1),
+    scenarioIndex: order[0],
+    stepIndex: 0,
+    startedAt: Date.now(),
+    finishedAt: null,
+    results: []
+  };
+  await setPlayback(pb);
+
+  // runPlayback() flips `ticking` synchronously, so PLAY_STATE polls that
+  // arrive during the first navigation won't spawn a second loop.
+  runPlayback(myGen);
+  return { ok: true };
+}
+
+// Advances the multi-suite play queue to `idx`: switches to that suite and
+// starts its own "play all" run. On failure to switch or start, records an
+// error entry and tries the next suite instead of stalling the whole chain.
+async function beginSuiteQueueEntry(idx) {
+  const q = await getSuiteQueue();
+  if (!q || !q.active) return false;
+  if (idx >= q.entries.length) {
+    q.active = false;
+    await setSuiteQueue(q);
+    return false;
+  }
+  const entry = q.entries[idx];
+  const switched = await doSwitchSuite(entry.id);
+  if (switched.ok) {
+    const started = await doPlayStart("all", null, { fromQueue: true });
+    if (started.ok) {
+      q.idx = idx;
+      await setSuiteQueue(q);
+      return true;
+    }
+  }
+  q.summaries.push({ name: entry.name, status: "error", passed: 0, failed: 0, skipped: 0, total: 0 });
+  q.idx = idx + 1;
+  await setSuiteQueue(q);
+  return beginSuiteQueueEntry(idx + 1);
+}
+
+// Records the just-finished suite's result into the active queue and either
+// chains into the next suite (natural completion) or ends the queue (an
+// explicit Stop, or the tab having been closed).
+async function settleSuiteQueueEntry(pb, chainNext) {
+  const q = await getSuiteQueue();
+  if (!q || !q.active) return;
+  const entry = q.entries[q.idx];
+  const results = pb.results || [];
+  q.summaries.push({
+    name: entry ? entry.name : "suite",
+    status: pb.status,
+    passed: results.filter((r) => r.status === "passed").length,
+    failed: results.filter((r) => r.status === "failed").length,
+    skipped: results.filter((r) => r.status === "skipped").length,
+    total: results.length
+  });
+  const nextIdx = q.idx + 1;
+  if (chainNext && nextIdx < q.entries.length) {
+    await setSuiteQueue(q);
+    await beginSuiteQueueEntry(nextIdx);
+  } else {
+    q.active = false;
+    await setSuiteQueue(q);
+  }
+}
+
+function newSuiteId() {
+  return "suite-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+}
+
 function stepId(n) {
   return "step-" + String(n + 1).padStart(3, "0");
 }
@@ -112,6 +343,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       case "START": {
+        // Preserve whatever suite was already open — starting a new one
+        // must never silently discard it.
+        await syncActiveSuite(session);
+
         const fresh = {
           ...DEFAULT_SESSION,
           active: true,
@@ -123,10 +358,140 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           scenarios: [newScenario(msg.scenarioName, 0)],
           recordingIndex: 0
         };
+        await setActiveSuiteId(newSuiteId());
         await setSession(fresh);
         fresh.tabId = await ensureRecordingTab(fresh);
         await setSession(fresh);
+        await syncActiveSuite(fresh);
         await broadcastState();
+        sendResponse({ ok: true });
+        return;
+      }
+
+      case "LIST_SUITES": {
+        // Bring the active suite's entry fully up to date first (covers
+        // steps recorded since the last mutation-triggered sync) so every
+        // suite — including the one you're mid-recording — shows correctly
+        // the moment you open "All suites".
+        await syncActiveSuite(session);
+        const suites = await getSuites();
+        const activeId = await getActiveSuiteId();
+        sendResponse({
+          ok: true,
+          activeSuiteId: activeId,
+          suites: suites
+            .slice()
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+            .map((s) => ({
+              id: s.id,
+              projectName: s.projectName,
+              suiteName: s.suiteName,
+              targetUrl: s.targetUrl,
+              scenarioCount: (s.scenarios || []).length,
+              updatedAt: s.updatedAt || 0
+            }))
+        });
+        return;
+      }
+
+      case "EXPORT_ALL_SUITES": {
+        // Full snapshots (scenarios included), not the summaries LIST_SUITES
+        // returns — this is what gets written to the bundle file.
+        await syncActiveSuite(session);
+        const suites = await getSuites();
+        sendResponse({
+          ok: true,
+          suites: suites.map((s) => ({
+            id: s.id,
+            projectName: s.projectName,
+            suiteName: s.suiteName,
+            targetUrl: s.targetUrl,
+            scenarios: s.scenarios || []
+          }))
+        });
+        return;
+      }
+
+      case "IMPORT_ALL_SUITES": {
+        // Purely additive: every suite in the bundle is added to the
+        // library as a new entry (fresh id, so it can never collide with
+        // one already here). Whatever is currently open is left alone.
+        const raw = Array.isArray(msg.suites) ? msg.suites : null;
+        if (!raw) {
+          sendResponse({ ok: false, reason: "bukan file bundle suite yang valid" });
+          return;
+        }
+        const str = (v, d) => (typeof v === "string" && v ? v : d);
+        const suites = await getSuites();
+        let added = 0;
+        for (const rawSuite of raw) {
+          const rs = rawSuite && typeof rawSuite === "object" ? rawSuite : {};
+          if (!Array.isArray(rs.scenarios)) continue;
+          const scenarios = rs.scenarios.map((sc, i) => {
+            sc = sc && typeof sc === "object" ? sc : {};
+            const steps = Array.isArray(sc.steps) ? sc.steps.filter(Boolean) : [];
+            return {
+              id: str(sc.id, "sc-" + Date.now().toString(36) + "-" + i),
+              name: str(sc.name, "Scenario " + (i + 1)),
+              saved: !!sc.saved,
+              steps: steps.map((st, k) => ({ ...st, id: str(st.id, stepId(k)) }))
+            };
+          });
+          suites.push({
+            id: newSuiteId(),
+            projectName: str(rs.projectName, "MyProject"),
+            suiteName: str(rs.suiteName, "Imported Suite " + (added + 1)),
+            targetUrl: str(rs.targetUrl, ""),
+            scenarios,
+            updatedAt: Date.now()
+          });
+          added++;
+        }
+        if (!added) {
+          sendResponse({ ok: false, reason: "tidak ada suite yang valid di file ini" });
+          return;
+        }
+        await setSuites(suites);
+        sendResponse({ ok: true, added });
+        return;
+      }
+
+      case "SWITCH_SUITE": {
+        const res = await doSwitchSuite(msg.id);
+        sendResponse(res);
+        return;
+      }
+
+      case "DELETE_SUITE": {
+        const suites = await getSuites();
+        const idx = suites.findIndex((s) => s.id === msg.id);
+        if (idx === -1) {
+          sendResponse({ ok: false, reason: "not found" });
+          return;
+        }
+        suites.splice(idx, 1);
+        await setSuites(suites);
+
+        const activeId = await getActiveSuiteId();
+        if (activeId === msg.id) {
+          playGen++;
+          if (session.active && session.tabId != null) {
+            try {
+              await chrome.tabs.sendMessage(session.tabId, {
+                type: "STATE_CHANGED",
+                recording: false
+              });
+            } catch (e) {
+              /* tab gone / not ready */
+            }
+          }
+          await setActiveSuiteId(null);
+          await setSession({ ...DEFAULT_SESSION });
+          await chrome.storage.local.set({
+            playback: { ...DEFAULT_PLAYBACK },
+            lastPlay: {}
+          });
+        }
         sendResponse({ ok: true });
         return;
       }
@@ -147,6 +512,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await setSession(session);
         session.tabId = await ensureRecordingTab(session);
         await setSession(session);
+        await syncActiveSuite(session);
         await broadcastState();
         sendResponse({ ok: true, index: session.recordingIndex });
         return;
@@ -169,6 +535,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await setSession(session);
         session.tabId = await ensureRecordingTab(session);
         await setSession(session);
+        await syncActiveSuite(session);
         await broadcastState();
         sendResponse({ ok: true });
         return;
@@ -201,6 +568,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         session.active = false;
         session.paused = false;
         await setSession(session);
+        await syncActiveSuite(session);
         await broadcastState();
         sendResponse({ ok: true });
         return;
@@ -213,6 +581,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             session.scenarios[idx].name = msg.name.trim();
           session.scenarios[idx].saved = true;
           await setSession(session);
+          await syncActiveSuite(session);
         }
         sendResponse({ ok: true });
         return;
@@ -224,6 +593,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (Array.isArray(msg.steps)) session.scenarios[idx].steps = msg.steps;
           if (typeof msg.name === "string") session.scenarios[idx].name = msg.name;
           await setSession(session);
+          await syncActiveSuite(session);
         }
         sendResponse({ ok: true });
         return;
@@ -236,6 +606,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (session.recordingIndex >= session.scenarios.length)
             session.recordingIndex = session.scenarios.length - 1;
           await setSession(session);
+          await syncActiveSuite(session);
         }
         sendResponse({ ok: true });
         return;
@@ -246,16 +617,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (typeof msg.suiteName === "string") session.suiteName = msg.suiteName;
         if (typeof msg.targetUrl === "string") session.targetUrl = msg.targetUrl;
         await setSession(session);
+        await syncActiveSuite(session);
         sendResponse({ ok: true });
         return;
       }
 
       case "RESET": {
         playGen++;
+        // Discards only the in-progress working session — anything already
+        // saved to the suite library (see syncActiveSuite) is untouched and
+        // can still be reopened from "All suites".
+        await setActiveSuiteId(null);
         await setSession({ ...DEFAULT_SESSION });
         await chrome.storage.local.set({
           playback: { ...DEFAULT_PLAYBACK },
-          lastPlay: {}
+          lastPlay: {},
+          suitePlayQueue: null
         });
         sendResponse({ ok: true });
         return;
@@ -282,6 +659,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             /* tab gone / not ready */
           }
         }
+        // Preserve whatever suite was already open before replacing it.
+        await syncActiveSuite(session);
         const str = (v, d) => (typeof v === "string" && v ? v : d);
         const imported = {
           ...DEFAULT_SESSION,
@@ -303,7 +682,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }),
           recordingIndex: -1
         };
+        await setActiveSuiteId(newSuiteId());
         await setSession(imported);
+        await syncActiveSuite(imported);
         await chrome.storage.local.set({
           playback: { ...DEFAULT_PLAYBACK },
           lastPlay: {}
@@ -319,64 +700,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       /* ----------------------------- playback ----------------------------- */
 
       case "PLAY_START": {
-        const scenarios = session.scenarios || [];
-        const mode = msg.mode === "all" ? "all" : "one";
+        const res = await doPlayStart(msg.mode, msg.index, {});
+        sendResponse(res);
+        return;
+      }
 
-        let order;
-        if (mode === "all") {
-          order = scenarios
-            .map((s, i) => i)
-            .filter((i) => (scenarios[i].steps || []).length);
-        } else {
-          const i = msg.index;
-          if (i == null || !scenarios[i] || !(scenarios[i].steps || []).length) {
-            sendResponse({ ok: false, reason: "no steps to play" });
-            return;
-          }
-          order = [i];
-        }
-        if (!order.length) {
+      case "PLAY_SUITES_START": {
+        const entries = Array.isArray(msg.entries)
+          ? msg.entries
+              .filter((e) => e && e.id)
+              .map((e) => ({ id: e.id, name: e.name || "Suite" }))
+          : [];
+        if (!entries.length) {
           sendResponse({ ok: false, reason: "nothing to play" });
           return;
         }
-
-        playGen++;
-        const myGen = playGen;
-
-        let tabId = session.tabId;
-        if (tabId != null) {
-          try {
-            await chrome.tabs.get(tabId);
-          } catch (e) {
-            tabId = null;
-          }
-        }
-        const startUrl = firstUrlOf(scenarios[order[0]]) || session.targetUrl;
-        if (tabId == null) {
-          const tab = await chrome.tabs.create({ url: startUrl || "about:blank" });
-          tabId = tab.id;
-        }
-
-        const pb = {
-          ...DEFAULT_PLAYBACK,
-          active: true,
-          status: "running",
-          tabId,
-          mode,
-          plan: order.slice(),
-          queue: order.slice(1),
-          scenarioIndex: order[0],
-          stepIndex: 0,
-          startedAt: Date.now(),
-          finishedAt: null,
-          results: []
-        };
-        await setPlayback(pb);
-        sendResponse({ ok: true });
-
-        // runPlayback() flips `ticking` synchronously, so PLAY_STATE polls that
-        // arrive during the first navigation won't spawn a second loop.
-        runPlayback(myGen);
+        await setSuiteQueue({ active: true, entries, idx: 0, summaries: [] });
+        const started = await beginSuiteQueueEntry(0);
+        sendResponse(started ? { ok: true } : { ok: false, reason: "could not start any suite" });
         return;
       }
 
@@ -390,6 +731,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           await sendToTab(pb.tabId, { type: "PLAY_STOP" }, 2000);
         } catch (e) {}
+        // A deliberate Stop ends the whole multi-suite chain — it never
+        // continues into the next suite.
+        await settleSuiteQueueEntry(pb, false);
         sendResponse({ ok: true });
         return;
       }
@@ -400,12 +744,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // marked active, restart it — same generation, so it just resumes.
         if (pb.active && !ticking) runPlayback(playGen);
         const sc = (session.scenarios || [])[pb.scenarioIndex];
+        const suiteQueue = await getSuiteQueue();
         sendResponse({
           ...pb,
           scenarioName: sc
             ? sc.name || "Scenario " + (pb.scenarioIndex + 1)
             : "",
-          totalSteps: sc ? (sc.steps || []).length : 0
+          totalSteps: sc ? (sc.steps || []).length : 0,
+          suiteQueue: suiteQueue || null
         });
         return;
       }
@@ -698,6 +1044,9 @@ async function finishPlayback() {
   try {
     await sendToTab(pb.tabId, { type: "PLAY_STOP" }, 2000);
   } catch (e) {}
+  // A suite finishing on its own (not via Stop) is exactly when the play
+  // queue should move on to the next suite, if there is one.
+  await settleSuiteQueueEntry(pb, true);
 }
 
 async function nextScenario(session) {
@@ -828,6 +1177,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     pb.status = "stopped";
     pb.finishedAt = Date.now();
     await setPlayback(pb);
+    await settleSuiteQueueEntry(pb, false);
   }
 });
 

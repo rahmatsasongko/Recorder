@@ -1,19 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Cypress Recorder Extension",
-  "version": "0.3.0",
-  "description": "Record website activity and convert it into Cypress tests with Page Object Model structure.",
+  "name": "QA Web Recorder",
+  "version": "0.4.0",
+  "description": "Record website activity and turn it into Cypress, Playwright or WebdriverIO tests with a Page Object Model structure.",
   "permissions": ["storage", "tabs", "scripting", "downloads", "activeTab"],
-  "host_permissions": [
-    "<all_urls>",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
-  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Cypress Recorder",
+    "default_title": "QA Web Recorder",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

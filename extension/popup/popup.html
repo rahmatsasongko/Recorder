@@ -3,265 +3,289 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="popup.css" />
-  <title>Cypress Recorder</title>
+  <title>QA Web Recorder</title>
 </head>
 <body>
-  <header>
-    <span class="logo">🧪</span>
-    <h1>Cypress Recorder</h1>
-    <span class="spacer"></span>
-    <button id="btn-reset" class="btn ghost sm" title="Discard the whole session">Reset</button>
-  </header>
-
-  <!-- Progress indicator — where am I in the flow -->
-  <nav class="stepper" id="stepper">
-    <span class="step-node" data-step="0"><b>1</b>Setup</span>
-    <span class="step-node" data-step="1"><b>2</b>Record</span>
-    <span class="step-node" data-step="2"><b>3</b>Review</span>
-    <span class="step-node" data-step="3"><b>4</b>Run</span>
-  </nav>
-
-  <main>
-    <!-- Shared hidden picker for "Import session" (kept outside the views so a
-         hidden parent never blocks the programmatic click). -->
-    <input type="file" id="import-file" accept=".json,.zip,application/json,application/zip" hidden />
-
-    <!-- ================= SETUP ================= -->
-    <section id="view-setup" class="view">
-      <div class="view-head">
-        <h2>Start a test suite</h2>
-        <p class="view-desc">Name the suite and the page you want to test. Recording opens in a new tab.</p>
-      </div>
-
-      <label for="projectName">Project name</label>
-      <input type="text" id="projectName" placeholder="TIJE Dashboard" />
-
-      <label for="suiteName">Test suite name</label>
-      <input type="text" id="suiteName" placeholder="Login" />
-      <div class="hint">Becomes <code>describe(...)</code> and the spec file name.</div>
-
-      <label for="targetUrl">Target URL</label>
-      <input type="url" id="targetUrl" placeholder="https://example.com/login" />
-
-      <div class="error" id="setup-error"></div>
-
-      <div class="row">
-        <button id="btn-start" class="btn primary lg">● Start recording — Scenario 1</button>
-      </div>
-      <div class="row">
-        <button id="btn-import" class="btn sm ghost">⬆ Import saved session (.json / .zip)</button>
-      </div>
-      <div id="spec-picker" class="import-report" hidden></div>
-    </section>
-
-    <!-- ================= RECORDING ================= -->
-    <section id="view-recording" class="view">
-      <div class="view-head">
-        <h2>Recording</h2>
-        <p class="view-desc">Do your actions in the recorded tab, then come back here to stop.</p>
-      </div>
-
-      <div class="rec-status">
-        <span class="dot" id="rec-dot"></span>
-        <span id="rec-label">Recording</span>
-      </div>
-      <div class="rec-sub" id="rec-scenario">Scenario</div>
-
-      <div class="metrics">
-        <div class="metric">
-          <div class="num" id="rec-timer">00:00</div>
-          <div class="lbl">Duration</div>
-        </div>
-        <div class="metric">
-          <div class="num" id="rec-count">0</div>
-          <div class="lbl">Steps</div>
+  <div class="shell">
+    <!-- ================= SIDEBAR ================= -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">🧪</span>
+        <div class="brand-copy">
+          <strong>QA Web Recorder</strong>
+          <small>Record → Review → Run</small>
         </div>
       </div>
 
-      <div class="row">
-        <button id="btn-pause" class="btn">⏸ Pause</button>
-        <button id="btn-stop" class="btn danger">■ Stop</button>
-      </div>
-    </section>
-
-    <!-- ================= SUITE HUB ================= -->
-    <section id="view-suite" class="view">
-      <div class="view-head">
-        <h2>Test suite</h2>
-        <p class="view-desc">Each scenario becomes one <code>it()</code>. Play a scenario to check it in the browser.</p>
-      </div>
-
-      <div class="suite-head">
-        <div class="suite-row"><span class="k">Suite</span><span class="v" id="suite-name">—</span></div>
-        <div class="suite-row"><span class="k">URL</span><span class="v mono" id="suite-url">—</span></div>
-      </div>
-
-      <div id="import-report" class="import-report" hidden></div>
-
-      <div class="list-head">
-        <strong>Scenarios</strong>
-        <button id="btn-add-scenario" class="btn sm">＋ Add scenario</button>
-      </div>
-      <div id="scenario-list"></div>
-      <div class="empty" id="scenario-empty" style="display:none;">
-        No scenarios yet — add one to start recording.
-      </div>
-
-      <div class="row wrap actions-primary">
-        <button id="btn-play-all" class="btn primary">▶ Play all in browser</button>
-        <button id="btn-generate" class="btn">⚙ Generate Cypress</button>
-      </div>
-
-      <details class="section-more">
-        <summary>More ways to run, export &amp; import</summary>
-        <div class="row wrap">
-          <button id="btn-run-1" class="btn sm">🔌 Run via agent</button>
-          <button id="btn-export-1" class="btn sm">⬇ Export ZIP</button>
-          <button id="btn-export-session" class="btn sm">⬇ Save session (.json)</button>
-          <button id="btn-import-2" class="btn sm">⬆ Import session</button>
-        </div>
-        <p class="hint">
-          “Run via agent” executes the real Cypress project (video + screenshots) but needs the
-          local agent running. “Play in browser” needs nothing. “Save session” writes a
-          <code>.json</code> you can re-import later (also tucked inside the exported ZIP).
-        </p>
-      </details>
-    </section>
-
-    <!-- ================= SCENARIO EDITOR ================= -->
-    <section id="view-scenario" class="view">
-      <div class="view-head">
-        <h2>Edit scenario</h2>
-        <p class="view-desc">Tap a step to expand it. Reorder, tweak selectors, or add assertions.</p>
-      </div>
-
-      <label for="scenarioName">Scenario name</label>
-      <input type="text" id="scenarioName" placeholder="Admin dapat melihat User Page" />
-
-      <div class="list-head">
-        <strong>Steps <span class="count-badge" id="scenario-count">0</span></strong>
-        <span class="tool-group">
-          <button id="btn-record-more" class="btn sm">● Record more</button>
-          <button id="btn-add-assertion" class="btn sm">+ Assertion</button>
-        </span>
-      </div>
-
-      <div class="steps" id="steps-list"></div>
-      <div class="empty" id="steps-empty" style="display:none;">No steps in this scenario.</div>
-
-      <div class="row wrap actions-primary">
-        <button id="btn-play-scenario" class="btn primary">▶ Play in browser</button>
-        <button id="btn-save-scenario" class="btn">💾 Save scenario</button>
-        <button id="btn-scenario-back" class="btn ghost">← Back</button>
-      </div>
-    </section>
-
-    <!-- ================= PLAYBACK ================= -->
-    <section id="view-play" class="view">
-      <div class="view-head">
-        <h2 id="play-title">Playing in browser</h2>
-        <p class="view-desc" id="play-desc">Each step runs in the recorded tab and is highlighted as it happens.</p>
-      </div>
-
-      <div class="play-bar">
-        <div class="play-progress"><span id="play-progress-fill"></span></div>
-        <div class="play-meta">
-          <span id="play-count">0 / 0</span>
-          <span class="spacer"></span>
-          <span id="play-elapsed" class="muted"></span>
+      <!-- One recording, any framework: only code generation differs. -->
+      <div class="fw-block">
+        <div class="fw-label">Framework</div>
+        <div class="fw-switch" id="fw-switch">
+          <button class="fw" data-fw="cypress" title="Generate Cypress (cy.*) specs">Cypress</button>
+          <button class="fw" data-fw="playwright" title="Generate Playwright (@playwright/test) specs">Playwright</button>
+          <button class="fw" data-fw="webdriverio" title="Generate WebdriverIO (mocha) specs">WebdriverIO</button>
         </div>
       </div>
 
-      <div id="play-summary" style="display:none;"></div>
+      <button id="btn-suites" class="btn sm full" title="Browse every saved suite">📁 All suites</button>
 
-      <div class="steps" id="play-steps"></div>
+      <!-- Progress indicator — where am I in the flow -->
+      <nav class="stepper" id="stepper">
+        <span class="step-node" data-step="0"><b>1</b><span class="step-label">Setup</span></span>
+        <span class="step-node" data-step="1"><b>2</b><span class="step-label">Record</span></span>
+        <span class="step-node" data-step="2"><b>3</b><span class="step-label">Review</span></span>
+        <span class="step-node" data-step="3"><b>4</b><span class="step-label">Run</span></span>
+      </nav>
 
-      <div class="row wrap actions-primary">
-        <button id="btn-play-stop" class="btn danger">■ Stop</button>
-        <button id="btn-play-again" class="btn primary" style="display:none;">▶ Play again</button>
-        <button id="btn-play-back" class="btn ghost">← Back to suite</button>
+      <div class="sidebar-foot">
+        <button id="btn-reset" class="btn sm full" title="Discard the whole session">↺ Reset session</button>
+        <small class="muted">v0.4.0</small>
       </div>
-    </section>
+    </aside>
 
-    <!-- ================= CODE PREVIEW ================= -->
-    <section id="view-code" class="view">
-      <div class="view-head">
-        <h2>Generated Cypress</h2>
-        <p class="view-desc">Page Object Model: Locator → Page → Spec, plus Messages &amp; Data.</p>
-      </div>
+    <!-- ================= CONTENT ================= -->
+    <div class="content-col">
+      <header class="topbar">
+        <span class="spacer"></span>
+        <small class="muted" id="foot-status">Ready</small>
+      </header>
 
-      <div class="tabs" id="code-tabs">
-        <div class="tab active" data-tab="spec">Spec</div>
-        <div class="tab" data-tab="page">Pages</div>
-        <div class="tab" data-tab="locator">Locators</div>
-        <div class="tab" data-tab="message">Messages</div>
-        <div class="tab" data-tab="data">Data</div>
-        <div class="tab" data-tab="structure">Structure</div>
-      </div>
+      <main>
+        <!-- Shared hidden pickers (kept outside the views so a hidden parent
+             never blocks the programmatic click). -->
+        <input type="file" id="import-file" accept=".json,.zip,application/json,application/zip" hidden />
+        <input type="file" id="import-suites-file" accept=".json,application/json" hidden />
 
-      <div class="filepick" id="filepick"></div>
-      <pre class="code" id="code-out">// Generate first</pre>
+        <!-- ================= SUITES LIBRARY ================= -->
+        <section id="view-suites" class="view">
+          <div class="view-head">
+            <h2>Test suites</h2>
+            <p class="view-desc">Pick a suite to keep working on it, or add a new one. Nothing is discarded when you switch.</p>
+          </div>
 
-      <div class="row wrap">
-        <button id="btn-copy" class="btn sm">⧉ Copy</button>
-        <button id="btn-play-2" class="btn sm primary">▶ Play</button>
-        <button id="btn-run-2" class="btn sm">🔌 Run via agent</button>
-        <button id="btn-export-2" class="btn sm">⬇ Export</button>
-        <button id="btn-code-back" class="btn sm ghost">← Back</button>
-      </div>
-    </section>
+          <div class="list-head">
+            <strong>Your suites</strong>
+            <button id="btn-add-suite" class="btn sm">＋ Add Suite</button>
+          </div>
+          <div id="suites-list"></div>
+          <div class="empty" id="suites-empty" style="display:none;">
+            No suites yet — add one to get started.
+          </div>
 
-    <!-- ================= RUN AUTOMATION (AGENT) ================= -->
-    <section id="view-run" class="view">
-      <div class="view-head">
-        <h2>Run via local agent</h2>
-        <p class="view-desc">Runs the real Cypress project headless and returns video + screenshots.</p>
-      </div>
+          <div class="row wrap actions-primary">
+            <button id="btn-export-suites" class="btn sm">⬇ Export all suites</button>
+            <button id="btn-import-suites" class="btn sm">⬆ Import suites</button>
+          </div>
+          <p class="hint">
+            Exports every saved suite into one <code>.json</code> bundle. Importing a bundle
+            <em>adds</em> its suites to your library — it never replaces or removes what's already here.
+          </p>
 
-      <div class="row tight" style="justify-content: space-between; align-items:center;">
-        <strong>Agent</strong>
-        <span id="agent-badge" class="agent-badge checking">checking…</span>
-      </div>
+          <div class="row wrap actions-primary">
+            <button id="btn-generate-all" class="btn primary full">⚙ Generate code — all suites combined</button>
+          </div>
+          <p class="hint">
+            Merges every saved suite into <strong>one Cypress project</strong>: one spec file per suite,
+            with shared Page Objects when two suites touch the same page. Ready to copy or export as a single repo.
+          </p>
+        </section>
 
-      <label for="agentUrl">Local agent URL</label>
-      <input type="text" id="agentUrl" placeholder="http://127.0.0.1:47654" />
+        <!-- ================= SETUP ================= -->
+        <section id="view-setup" class="view">
+          <div class="view-head">
+            <h2>Start a test suite</h2>
+            <p class="view-desc">Name the suite and the page you want to test. Recording opens in a new tab.</p>
+          </div>
 
-      <label for="runEnv">Cypress env — JSON, optional</label>
-      <textarea id="runEnv" rows="2" placeholder='{ "password": "secret" }'></textarea>
+          <div class="field-grid">
+            <div class="field">
+              <label for="projectName">Project name</label>
+              <input type="text" id="projectName" placeholder="TIJE Dashboard" />
+            </div>
+            <div class="field">
+              <label for="suiteName">Test suite name</label>
+              <input type="text" id="suiteName" placeholder="Login" />
+              <div class="hint">Becomes <code>describe(...)</code> and the spec file name.</div>
+            </div>
+          </div>
 
-      <div class="hint" id="agent-hint"></div>
+          <label for="targetUrl">Target URL</label>
+          <input type="url" id="targetUrl" placeholder="https://example.com/login" />
 
-      <div class="row wrap">
-        <button id="btn-run-now" class="btn primary">▶ Run now</button>
-        <button id="btn-agent-recheck" class="btn">↻ Re-check</button>
-        <button id="btn-run-back" class="btn ghost">← Back</button>
-      </div>
+          <div class="error" id="setup-error"></div>
 
-      <div id="run-progress" style="display:none; margin-top:12px;">
-        <div class="rec-status">
-          <span class="dot"></span>
-          <span id="run-phase">Running…</span>
-          <span id="run-elapsed" class="muted"></span>
-        </div>
-        <pre class="code" id="run-log" style="max-height:150px;"></pre>
-      </div>
+          <div class="row">
+            <button id="btn-start" class="btn primary lg">● Start recording — Scenario 1</button>
+          </div>
+          <div class="row">
+            <button id="btn-import" class="btn sm ghost">⬆ Import saved session (.json / .zip)</button>
+          </div>
+          <div id="spec-picker" class="import-report" hidden></div>
+        </section>
 
-      <div id="run-result" style="display:none; margin-top:12px;">
-        <div id="run-summary"></div>
-        <div id="run-specs"></div>
-        <div class="row">
-          <button id="btn-run-again" class="btn primary">▶ Run again</button>
-        </div>
-      </div>
-    </section>
-  </main>
+        <!-- ================= RECORDING ================= -->
+        <section id="view-recording" class="view">
+          <div class="view-head">
+            <h2>Recording</h2>
+            <p class="view-desc">Do your actions in the recorded tab, then come back here to stop.</p>
+          </div>
 
-  <footer>
-    <small class="muted" id="foot-status">Ready</small>
-    <span class="spacer"></span>
-    <small class="muted">v0.3.0</small>
-  </footer>
+          <div class="rec-status">
+            <span class="dot" id="rec-dot"></span>
+            <span id="rec-label">Recording</span>
+          </div>
+          <div class="rec-sub" id="rec-scenario">Scenario</div>
 
+          <div class="metrics">
+            <div class="metric">
+              <div class="num" id="rec-timer">00:00</div>
+              <div class="lbl">Duration</div>
+            </div>
+            <div class="metric">
+              <div class="num" id="rec-count">0</div>
+              <div class="lbl">Steps</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <button id="btn-pause" class="btn">⏸ Pause</button>
+            <button id="btn-stop" class="btn danger">■ Stop</button>
+          </div>
+        </section>
+
+        <!-- ================= SUITE HUB ================= -->
+        <section id="view-suite" class="view">
+          <div class="view-head">
+            <h2>Test suite</h2>
+            <p class="view-desc">Each scenario becomes one <code>it()</code>. Play a scenario to check it in the browser.</p>
+          </div>
+
+          <div class="suite-head">
+            <div class="suite-row"><span class="k">Suite</span><span class="v" id="suite-name">—</span></div>
+            <div class="suite-row"><span class="k">URL</span><span class="v mono" id="suite-url">—</span></div>
+          </div>
+
+          <div id="import-report" class="import-report" hidden></div>
+
+          <div class="list-head">
+            <strong>Scenarios</strong>
+            <button id="btn-add-scenario" class="btn sm">＋ Add scenario</button>
+          </div>
+          <div id="scenario-list"></div>
+          <div class="empty" id="scenario-empty" style="display:none;">
+            No scenarios yet — add one to start recording.
+          </div>
+
+          <div class="row wrap actions-primary">
+            <button id="btn-play-all" class="btn primary">▶ Play all in browser</button>
+            <button id="btn-generate" class="btn">⚙ Generate code</button>
+          </div>
+
+          <details class="section-more">
+            <summary>More ways to export &amp; import</summary>
+            <div class="row wrap">
+              <button id="btn-export-1" class="btn sm">⬇ Export ZIP</button>
+              <button id="btn-export-session" class="btn sm">⬇ Save session (.json)</button>
+              <button id="btn-import-2" class="btn sm">⬆ Import session</button>
+            </div>
+            <p class="hint">
+              “Play in browser” replays the recording itself, so it works whichever framework is
+              selected. “Export ZIP” writes a ready-to-run project for that framework. “Save session”
+              writes a <code>.json</code> you can re-import later (also tucked inside the exported ZIP;
+              ZIP import reads Cypress projects).
+            </p>
+          </details>
+        </section>
+
+        <!-- ================= SCENARIO EDITOR ================= -->
+        <section id="view-scenario" class="view">
+          <div class="view-head">
+            <h2>Edit scenario</h2>
+            <p class="view-desc">Tap a step to expand it. Reorder, tweak selectors, or add assertions.</p>
+          </div>
+
+          <label for="scenarioName">Scenario name</label>
+          <input type="text" id="scenarioName" placeholder="Admin dapat melihat User Page" />
+
+          <div class="list-head">
+            <strong>Steps <span class="count-badge" id="scenario-count">0</span></strong>
+            <span class="tool-group">
+              <button id="btn-record-more" class="btn sm">● Record more</button>
+              <button id="btn-add-assertion" class="btn sm">+ Assertion</button>
+            </span>
+          </div>
+
+          <div class="steps" id="steps-list"></div>
+          <div class="empty" id="steps-empty" style="display:none;">No steps in this scenario.</div>
+
+          <div class="row wrap actions-primary">
+            <button id="btn-play-scenario" class="btn primary">▶ Play in browser</button>
+            <button id="btn-save-scenario" class="btn">💾 Save scenario</button>
+            <button id="btn-scenario-back" class="btn ghost">← Back</button>
+          </div>
+        </section>
+
+        <!-- ================= PLAYBACK ================= -->
+        <section id="view-play" class="view">
+          <div class="view-head">
+            <h2 id="play-title">Playing in browser</h2>
+            <p class="view-desc" id="play-desc">Each step runs in the recorded tab and is highlighted as it happens.</p>
+          </div>
+
+          <div class="play-bar">
+            <div class="play-progress"><span id="play-progress-fill"></span></div>
+            <div class="play-meta">
+              <span id="play-count">0 / 0</span>
+              <span class="spacer"></span>
+              <span id="play-elapsed" class="muted"></span>
+            </div>
+          </div>
+
+          <div id="play-summary" style="display:none;"></div>
+
+          <div class="steps" id="play-steps"></div>
+
+          <div class="row wrap actions-primary">
+            <button id="btn-play-stop" class="btn danger">■ Stop</button>
+            <button id="btn-play-again" class="btn primary" style="display:none;">▶ Play again</button>
+            <button id="btn-play-back" class="btn ghost">← Back to suite</button>
+          </div>
+        </section>
+
+        <!-- ================= CODE PREVIEW ================= -->
+        <section id="view-code" class="view">
+          <div class="view-head">
+            <h2 id="code-title">Generated code</h2>
+            <p class="view-desc">Page Object Model: Locator → Page → Spec, plus Messages &amp; Data.</p>
+          </div>
+
+          <div class="tabs" id="code-tabs">
+            <div class="tab active" data-tab="spec">Spec</div>
+            <div class="tab" data-tab="page">Pages</div>
+            <div class="tab" data-tab="locator">Locators</div>
+            <div class="tab" data-tab="message">Messages</div>
+            <div class="tab" data-tab="data">Data</div>
+            <div class="tab" data-tab="structure">Structure</div>
+          </div>
+
+          <div class="filepick" id="filepick"></div>
+          <pre class="code" id="code-out">// Generate first</pre>
+
+          <div class="row wrap">
+            <button id="btn-copy" class="btn sm">⧉ Copy</button>
+            <button id="btn-play-2" class="btn sm primary">▶ Play</button>
+            <button id="btn-export-2" class="btn sm">⬇ Export</button>
+            <button id="btn-code-back" class="btn sm ghost">← Back</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="../lib/gen-core.js"></script>
+  <script src="../lib/gen-cypress.js"></script>
+  <script src="../lib/gen-playwright.js"></script>
+  <script src="../lib/gen-wdio.js"></script>
   <script src="../lib/generator.js"></script>
   <script src="../lib/zip.js"></script>
   <script src="../lib/importer.js"></script>

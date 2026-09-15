@@ -15,9 +15,23 @@
     return /^\(*\s*\.?\/\//.test(sel) || sel.startsWith("(//");
   }
 
-  function resolveEl(sel) {
+  // A text selector holds the element's visible label, not CSS, so it is
+  // matched by scanning elements of the recorded tag.
+  function resolveByText(text, tag) {
+    const wanted = String(text).replace(/\s+/g, " ").trim();
+    const list = document.getElementsByTagName(tag || "*");
+    for (let i = 0; i < list.length; i++) {
+      if ((list[i].textContent || "").replace(/\s+/g, " ").trim() === wanted) {
+        return list[i];
+      }
+    }
+    return null;
+  }
+
+  function resolveEl(sel, type, tag) {
     if (!sel) return null;
     try {
+      if (type === "text") return resolveByText(sel, tag);
       if (isXPath(sel)) {
         const r = document.evaluate(
           sel,
@@ -43,11 +57,15 @@
     return r.width > 0 && r.height > 0;
   }
 
-  function waitForEl(sel, { visible = false } = {}, timeout = 10000) {
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  function waitForEl(sel, { visible = false, type, tag } = {}, timeout = 10000) {
     return new Promise((resolve) => {
       const started = Date.now();
       const tick = () => {
-        const el = resolveEl(sel);
+        const el = resolveEl(sel, type, tag);
         if (el && (!visible || isVisible(el))) return resolve(el);
         if (Date.now() - started >= timeout) return resolve(el || null);
         setTimeout(tick, 200);
@@ -88,6 +106,65 @@
     );
   }
 
+  // Drag a resize grip by (dx, dy). Resizable widgets listen for mousemove /
+  // mouseup on `document` once the drag starts, and they need several
+  // intermediate moves — one jump from start to end is usually ignored.
+  async function dragBy(el, dx, dy, steps = 10) {
+    const r = el.getBoundingClientRect();
+    const x0 = r.left + r.width / 2;
+    const y0 = r.top + r.height / 2;
+
+    const at = (type, x, y, target) =>
+      (target || el).dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+          buttons: type === "mouseup" ? 0 : 1,
+          clientX: Math.round(x),
+          clientY: Math.round(y)
+        })
+      );
+
+    at("mouseover", x0, y0);
+    at("mousedown", x0, y0);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      at("mousemove", x0 + dx * t, y0 + dy * t, document);
+      await sleep(16);
+    }
+    at("mouseup", x0 + dx, y0 + dy, document);
+  }
+
+  // Drag from one element onto another, ending over the target's centre.
+  async function dragOnto(src, dst, steps = 12) {
+    const a = src.getBoundingClientRect();
+    const b = dst.getBoundingClientRect();
+    return dragBy(
+      src,
+      b.left + b.width / 2 - (a.left + a.width / 2),
+      b.top + b.height / 2 - (a.top + a.height / 2),
+      steps
+    );
+  }
+
+  // HTML5 drag-and-drop ignores synthetic mouse moves: the browser only
+  // reacts to dragstart/dragover/drop, and all three must share one
+  // DataTransfer so the payload survives the trip.
+  function html5DragOnto(src, dst) {
+    const dt = new DataTransfer();
+    const fire = (el, type) =>
+      el.dispatchEvent(
+        new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt })
+      );
+    fire(src, "dragstart");
+    fire(dst, "dragenter");
+    fire(dst, "dragover");
+    fire(dst, "drop");
+    fire(src, "dragend");
+  }
+
   const KEY_MAP = {
     "{enter}": "Enter",
     "{tab}": "Tab",
@@ -124,14 +201,18 @@
     if (a === "upload") {
       return skip(
         `upload "${truncate(step.value)}" dilewati — jalankan lewat Cypress (cy.selectFile + fixture)`,
-        resolveEl(step.selector)
+        resolveEl(step.selector, step.selectorType, step.tagName)
       );
     }
 
     if (!step.selector) return bad(`no selector for ${a}`);
 
     const needVisible = a === "click" || a === "type" || a === "clear" || a === "select";
-    const el = await waitForEl(step.selector, { visible: needVisible });
+    const el = await waitForEl(step.selector, {
+      visible: needVisible,
+      type: step.selectorType,
+      tag: step.tagName
+    });
     if (!el) return bad(`element not found: ${step.selector}`);
 
     // Clicking a file input opens the native picker and stalls playback.
@@ -146,6 +227,57 @@
     }
 
     switch (a) {
+      case "drag": {
+        const dx = Number(step.dx) || 0;
+        const dy = Number(step.dy) || 0;
+        if (!dx && !dy) return skip("drag has no recorded distance", el);
+        const before = el.getBoundingClientRect();
+        await dragBy(el, dx, dy);
+        await sleep(120);
+        const after = el.getBoundingClientRect();
+        if (
+          Math.round(before.left) === Math.round(after.left) &&
+          Math.round(before.top) === Math.round(after.top)
+        ) {
+          return bad("drag had no effect — the element did not move", el);
+        }
+        return ok(el, `dragged ${dx}, ${dy}`);
+      }
+
+      case "drop": {
+        if (!step.targetSelector) return bad("drop has no target selector", el);
+        const target = await waitForEl(step.targetSelector, {
+          visible: true,
+          type: step.targetSelectorType,
+          tag: step.targetTagName
+        });
+        if (!target) return bad(`drop target not found: ${step.targetSelector}`, el);
+        if (step.dnd === "html5") {
+          html5DragOnto(el, target);
+        } else {
+          await dragOnto(el, target);
+        }
+        await sleep(150);
+        return ok(target, `dropped on ${truncate(step.targetName || step.targetSelector)}`);
+      }
+
+      case "resize": {
+        const dx = Number(step.dx) || 0;
+        const dy = Number(step.dy) || 0;
+        if (!dx && !dy) return skip("resize has no recorded distance", el);
+        const box = el.parentElement || el;
+        const before = box.getBoundingClientRect();
+        await dragBy(el, dx, dy);
+        await sleep(120);
+        const after = box.getBoundingClientRect();
+        const w = Math.round(after.width);
+        const h = Math.round(after.height);
+        if (Math.round(before.width) === w && Math.round(before.height) === h) {
+          return bad(`resize had no effect — still ${w}x${h}`, el);
+        }
+        return ok(el, `resized to ${w}x${h}`);
+      }
+
       case "click": {
         fireMouse(el, "mousedown");
         try {
@@ -256,7 +388,7 @@
       }
       // cy.contains(selector, text): any element matching the selector whose
       // text includes the value — not just the first one.
-      await waitForEl(step.selector);
+      await waitForEl(step.selector, { type: step.selectorType, tag: step.tagName });
       let matches = [];
       try {
         matches = Array.from(document.querySelectorAll(step.selector));
@@ -272,7 +404,7 @@
     if (!step.selector) return bad("no selector for assertion");
 
     if (type === "value") {
-      const el = await waitForEl(step.selector);
+      const el = await waitForEl(step.selector, { type: step.selectorType, tag: step.tagName });
       if (!el) return bad(`element not found: ${step.selector}`);
       const actual = el.value == null ? "" : String(el.value);
       return actual === val
@@ -281,7 +413,11 @@
     }
 
     // visible | exist
-    const el = await waitForEl(step.selector, { visible: type === "visible" });
+    const el = await waitForEl(step.selector, {
+      visible: type === "visible",
+      type: step.selectorType,
+      tag: step.tagName
+    });
     if (!el) return bad(`element not found: ${step.selector}`);
     if (type === "visible" && !isVisible(el)) return bad("element is not visible", el);
     return ok(el, type === "visible" ? "is visible" : "exists");
@@ -315,21 +451,23 @@
         font: 12px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       .cyp-box {
-        border: 2px solid #0969da; border-radius: 3px;
+        border: 2px solid #0969da; border-radius: 5px;
         background: rgba(9,105,218,.10);
-        box-shadow: 0 0 0 2px rgba(255,255,255,.65);
+        box-shadow: 0 0 0 2px rgba(255,255,255,.65), 0 2px 8px rgba(9,105,218,.25);
         transition: all .12s ease-out;
       }
-      .cyp-box.cyp-fail { border-color: #cf222e; background: rgba(207,34,46,.12); }
+      .cyp-box.cyp-fail { border-color: #cf222e; background: rgba(207,34,46,.12); box-shadow: 0 0 0 2px rgba(255,255,255,.65), 0 2px 8px rgba(207,34,46,.25); }
       .cyp-cap {
-        background: #0969da; color: #fff; padding: 2px 6px; border-radius: 4px;
+        background: #0969da; color: #fff; padding: 3px 8px; border-radius: 5px;
+        font-weight: 600; box-shadow: 0 2px 6px rgba(0,0,0,.2);
         max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .cyp-cap.cyp-fail { background: #cf222e; }
       .cyp-toast {
-        top: 12px; left: 50%; transform: translateX(-50%);
+        top: 14px; left: 50%; transform: translateX(-50%);
         background: rgba(13,17,23,.92); color: #e6edf3;
-        padding: 6px 14px; border-radius: 999px; max-width: 80vw;
+        padding: 7px 16px; border-radius: 999px; max-width: 80vw;
+        font-weight: 500; box-shadow: 0 4px 16px rgba(0,0,0,.3);
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
     `;

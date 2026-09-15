@@ -15,6 +15,44 @@
 
   const DYNAMIC_CLASS = /(^|[-_])(ng|css|jsx|sc|emotion|hash|[0-9a-f]{5,})([-_]|$)|\d{3,}/i;
 
+  // Classes that describe a momentary state, not what the element IS.
+  // Recording happens mid-interaction — a drop target is decorated with
+  // ui-droppable-active / ui-droppable-hover while the drag is still in
+  // flight — so keeping these would bake "was being hovered" into the
+  // selector, and it would match nothing once the page settles.
+  // Whole-class states: class="active", class="ui-active", class="loading".
+  const STATE_EXACT =
+    "active|inactive|hover|hovered|focus|focused|selected|checked|current|" +
+    "open|opened|closed|show|shown|hidden|visible|over|" +
+    "disabled|readonly|loading|busy|error|invalid|valid|fade|" +
+    "dragging|dragover|highlight|highlighted|expanded|collapsed|" +
+    "helper|placeholder|resizing|sorting";
+
+  // Suffix states: ui-droppable-hover, drag-over, is-active, tab-selected.
+  // Deliberately narrower — a class like `alert-error` names the thing, while
+  // `panel-open` only describes how it looks right now.
+  const STATE_SUFFIX =
+    "active|inactive|hover|hovered|focus|focused|selected|checked|current|" +
+    "open|opened|closed|shown|hidden|visible|over|disabled|" +
+    "dragging|dragover|highlight|highlighted|expanded|collapsed|" +
+    "helper|placeholder|resizing|sorting";
+
+  const STATE_CLASS = new RegExp(
+    [
+      `^(?:ui-)?(?:${STATE_EXACT})$`,
+      `^ui-state-[\\w-]+$`, // ui-state-hover / -active / -highlight
+      // (ui-widget-content and ui-widget-header are structural — keep them)
+      `^[\\w-]+-(?:${STATE_SUFFIX})$` // ui-droppable-hover, drag-over, is-active
+    ].join("|"),
+    "i"
+  );
+
+  function stableClasses(el) {
+    return Array.from(el.classList || []).filter(
+      (c) => c && !DYNAMIC_CLASS.test(c) && !STATE_CLASS.test(c)
+    );
+  }
+
   function isUnique(selector, root = document) {
     try {
       return root.querySelectorAll(selector).length === 1;
@@ -35,11 +73,35 @@
   }
 
   function niceClassSelector(el) {
-    const classes = Array.from(el.classList).filter(
-      (c) => c && !DYNAMIC_CLASS.test(c)
-    );
+    const classes = stableClasses(el);
     if (!classes.length) return null;
     return el.tagName.toLowerCase() + "." + classes.map(cssEscape).join(".");
+  }
+
+  // An element identified by its classes — `div.drop-box.ui-droppable`, or
+  // scoped to the nearest ancestor with an id when the classes alone appear
+  // more than once. A descendant selector is used on purpose: it survives
+  // wrapper markup changing, which a `>` chain does not.
+  function classSelector(el) {
+    const base = niceClassSelector(el);
+    if (!base) return null;
+    if (isUnique(base)) return { selector: base, type: "class", stable: true };
+
+    let anc = el.parentElement;
+    let depth = 0;
+    while (anc && depth < 5) {
+      const id = anc.getAttribute && anc.getAttribute("id");
+      if (id && !DYNAMIC_CLASS.test(id)) {
+        const scoped = `#${cssEscape(id)} ${base}`;
+        if (isUnique(scoped)) {
+          return { selector: scoped, type: "class", stable: true };
+        }
+        break; // a closer id that doesn't disambiguate won't get better higher up
+      }
+      anc = anc.parentElement;
+      depth++;
+    }
+    return null;
   }
 
   function nthSelector(el) {
@@ -161,18 +223,74 @@
     return null;
   }
 
-  // Returns { selector, type, stable }
+  // An explicit ARIA role, narrowed by its accessible name when it needs to be.
+  // Only declared roles count — an implicit role (a <button> is role=button
+  // without saying so) is not something a CSS selector can target.
+  function roleSelector(el) {
+    const role = el.getAttribute && el.getAttribute("role");
+    if (!role) return null;
+    const tag = el.tagName.toLowerCase();
+    const roleSel = `[role="${role.replace(/"/g, '\\"')}"]`;
+    const label = el.getAttribute("aria-label");
+    const candidates = [];
+    if (label) {
+      const labelSel = `[aria-label="${label.replace(/"/g, '\\"')}"]`;
+      candidates.push(`${roleSel}${labelSel}`, `${tag}${roleSel}${labelSel}`);
+    }
+    candidates.push(roleSel, `${tag}${roleSel}`);
+    for (const sel of candidates) {
+      if (isUnique(sel)) return { selector: sel, type: "role", stable: true };
+    }
+    return null;
+  }
+
+  const TEXTLESS_TAGS = ["html", "body", "head", "script", "style", "svg", "select"];
+
+  function normText(el) {
+    return (el.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  // The visible label of the element, when no other element of the same tag
+  // carries exactly that text. Stored as plain text, not a CSS selector —
+  // every framework has its own way of spelling "find by text".
+  function textSelector(el) {
+    const tag = el.tagName.toLowerCase();
+    if (TEXTLESS_TAGS.includes(tag)) return null;
+    const text = normText(el);
+    if (!text || text.length > 50 || !/[a-zA-Z0-9]/.test(text)) return null;
+
+    let seen = 0;
+    const sameTag = document.getElementsByTagName(tag);
+    for (let i = 0; i < sameTag.length; i++) {
+      if (normText(sameTag[i]) === text && ++seen > 1) return null;
+    }
+    return seen === 1 ? { selector: text, type: "text", stable: true, tag } : null;
+  }
+
+  // Returns { selector, type, stable, tag? }
+  //
+  // Priority, most durable first:
+  //   1 test-id   2 role/accessibility   3 id      4 name / aria-label
+  //   5 text      6 css (classes)        7 class / attribute   8 xpath
+  //
+  // 6 and 7 are both CSS: a clean class selector reads better and survives
+  // markup shuffling, so it is tried before the remaining attributes and the
+  // positional `>` path that ends the chain.
   function buildSelector(el) {
-    // 1. A test-id anywhere on the element or a close wrapper — always preferred.
+    // 1. A test-id anywhere on the element or a close wrapper.
     const testId = testIdSelector(el);
     if (testId) return testId;
 
+    // 2. Role / accessibility.
+    const byRole = roleSelector(el);
+    if (byRole) return byRole;
+
+    // 3-4. id, then name / accessible label.
     const priority = [
       { attr: "id", type: "id" },
       { attr: "name", type: "name" },
       { attr: "aria-label", type: "aria-label" }
     ];
-
     for (const p of priority) {
       const sel = attrSelector(el, p.attr);
       if (!sel) continue;
@@ -184,8 +302,16 @@
       if (isUnique(sel)) return { selector: sel, type: p.type, stable: true };
     }
 
-    // Stable content attributes before falling back to a positional CSS path.
-    for (const attr of ["placeholder", "title", "alt", "type", "role", "href"]) {
+    // 5. Visible text.
+    const byText = textSelector(el);
+    if (byText) return byText;
+
+    // 6. Meaningful classes — the only handle many drop zones and cards have.
+    const byClass = classSelector(el);
+    if (byClass) return byClass;
+
+    // 7. Remaining content attributes, then a positional CSS path.
+    for (const attr of ["placeholder", "title", "alt", "type", "href"]) {
       const sel = attrSelector(el, attr);
       if (!sel) continue;
       const scoped = `${el.tagName.toLowerCase()}${sel}`;
@@ -197,6 +323,7 @@
       return { selector: css, type: "css", stable: !DYNAMIC_CLASS.test(css) };
     }
 
+    // 8. Last resort.
     return { selector: xPath(el), type: "xpath", stable: false };
   }
 
@@ -287,6 +414,7 @@
 
   function onClick(e) {
     if (!recording) return;
+    if (Date.now() - lastDragAt < 400) return; // tail of a drag / resize / drop
 
     const raw = e.target;
 
@@ -414,6 +542,193 @@
     });
   }
 
+  /* ------------------------ drag: resize / move / drop ------------------------ *
+   * None of these surface as a click or change event — each has to be
+   * assembled from mousedown → mouseup. What is recognised on mousedown:
+   *   - a resize handle (jQuery UI's .ui-resizable-handle and friends), or a
+   *     native CSS `resize` corner (bottom-right ~16px of the element)
+   *   - a draggable element (.ui-draggable, [draggable=true], …)
+   * and on mouseup, where it landed:
+   *   - over a drop target  -> a `drop` step (source + target)
+   *   - anywhere else       -> a `resize` or `drag` step (pointer delta)
+   * The pointer delta is what replays reliably; sizes and target names are
+   * recorded for readability.
+   */
+
+  const HANDLE_SELECTOR =
+    ".ui-resizable-handle,.resizable-handle,[class*='resize-handle']," +
+    "[data-resize-handle],[class*='ui-resizable-']";
+  const NATIVE_GRIP = 18; // px corner of a CSS `resize: both` element
+
+  const DRAGGABLE_SELECTOR =
+    "[draggable='true'],.ui-draggable,.draggable,[data-draggable]," +
+    "[class*='draggable'],[class*='ui-sortable-']";
+  const DROPPABLE_SELECTOR =
+    ".ui-droppable,.droppable,[data-droppable],[data-drop-target]," +
+    "[class*='droppable'],[class*='dropzone'],[class*='drop-zone']";
+
+  function draggableOf(el) {
+    if (!el || !el.closest) return null;
+    const drag = el.closest(DRAGGABLE_SELECTOR);
+    // A resize grip often lives inside a draggable box — the grip wins.
+    if (!drag || drag.closest(HANDLE_SELECTOR)) return null;
+    return drag;
+  }
+
+  // What sits under the pointer at drop time, ignoring the element being
+  // dragged (it follows the cursor and would shadow everything below it).
+  function dropTargetUnder(x, y, source) {
+    const stack =
+      (document.elementsFromPoint && document.elementsFromPoint(x, y)) || [];
+    for (const el of stack) {
+      if (el === source || (source.contains && source.contains(el))) continue;
+      const hit = el.closest && el.closest(DROPPABLE_SELECTOR);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function resizeHandleOf(el) {
+    if (!el || !el.closest) return null;
+    const handle = el.closest(HANDLE_SELECTOR);
+    if (handle) return { handle, box: handle.parentElement || handle };
+    return null;
+  }
+
+  function nativeResizeCornerOf(el, e) {
+    if (!el || el.nodeType !== 1) return null;
+    const resize = getComputedStyle(el).resize;
+    if (!resize || resize === "none") return null;
+    const r = el.getBoundingClientRect();
+    const inCorner =
+      e.clientX >= r.right - NATIVE_GRIP && e.clientY >= r.bottom - NATIVE_GRIP;
+    return inCorner ? { handle: el, box: el } : null;
+  }
+
+  // Name the step after the box being resized, not the grip (which has no
+  // text of its own). "handle" is a type word to the generator, so this
+  // becomes locator `handleResizableBox` + method `resizeResizableBox`.
+  function resizeTargetName(box) {
+    const tid = firstTestId(box);
+    const raw =
+      (tid && tid.value) || box.id || box.getAttribute("aria-label") || "";
+    return (raw ? humanize(raw) : elementName(box)) + " handle";
+  }
+
+  let dragStart = null;
+  let lastDragAt = 0;
+
+  function onMouseDown(e) {
+    if (!recording || e.button !== 0) return;
+    const el = e.target;
+
+    const resize = resizeHandleOf(el) || nativeResizeCornerOf(el, e);
+    if (resize) {
+      const r = resize.box.getBoundingClientRect();
+      dragStart = {
+        kind: "resize",
+        el: resize.handle,
+        box: resize.box,
+        x: e.clientX,
+        y: e.clientY,
+        w: Math.round(r.width),
+        h: Math.round(r.height)
+      };
+      return;
+    }
+
+    const drag = draggableOf(el);
+    if (drag) {
+      dragStart = { kind: "drag", el: drag, box: drag, x: e.clientX, y: e.clientY };
+    }
+  }
+
+  function onMouseUp(e) {
+    if (!recording || !dragStart) return;
+    const start = dragStart;
+    dragStart = null;
+
+    const dx = Math.round(e.clientX - start.x);
+    const dy = Math.round(e.clientY - start.y);
+    if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return; // a click, not a drag
+
+    lastDragAt = Date.now(); // the mouseup also fires a click — ignore it
+
+    if (start.kind === "drag") {
+      const target = dropTargetUnder(e.clientX, e.clientY, start.el);
+      if (target) {
+        const t = describe(target);
+        sendStep({
+          action: "drop",
+          value: t.elementName,
+          dx,
+          dy,
+          targetSelector: t.selector,
+          targetSelectorType: t.selectorType,
+          targetSelectorStable: t.selectorStable,
+          targetTagName: t.tagName,
+          targetName: t.elementName,
+          ...describe(start.el)
+        });
+        return;
+      }
+      sendStep({ action: "drag", value: `${dx},${dy}`, dx, dy, ...describe(start.el) });
+      return;
+    }
+
+    // The widget settles asynchronously, so read the final size on the next
+    // frame rather than mid-drag.
+    requestAnimationFrame(() => {
+      const r = start.box.getBoundingClientRect();
+      const width = Math.round(r.width);
+      const height = Math.round(r.height);
+      sendStep({
+        action: "resize",
+        value: `${width}x${height}`,
+        dx,
+        dy,
+        width,
+        height,
+        fromWidth: start.w,
+        fromHeight: start.h,
+        ...describe(start.el),
+        elementName: resizeTargetName(start.box)
+      });
+    });
+  }
+
+  /* HTML5 drag-and-drop fires its own events and never a mouseup, so it needs
+   * its own pair of listeners. Replaying it needs a DataTransfer rather than
+   * synthetic mouse moves, hence the `dnd` marker on the step. */
+  let html5Src = null;
+
+  function onDragStart(e) {
+    if (!recording) return;
+    dragStart = null; // this is not a mouse drag after all
+    html5Src = e.target;
+  }
+
+  function onHtml5Drop(e) {
+    if (!recording || !html5Src) return;
+    const src = html5Src;
+    html5Src = null;
+    const raw = e.target;
+    const target = (raw.closest && raw.closest(DROPPABLE_SELECTOR)) || raw;
+    lastDragAt = Date.now();
+    const t = describe(target);
+    sendStep({
+      action: "drop",
+      value: t.elementName,
+      dnd: "html5",
+      targetSelector: t.selector,
+      targetSelectorType: t.selectorType,
+      targetSelectorStable: t.selectorStable,
+      targetTagName: t.tagName,
+      targetName: t.elementName,
+      ...describe(src)
+    });
+  }
+
   let lastScroll = 0;
   function onScroll() {
     if (!recording) return;
@@ -453,6 +768,10 @@
   document.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("change", onChange, true);
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("mousedown", onMouseDown, true);
+  document.addEventListener("mouseup", onMouseUp, true);
+  document.addEventListener("dragstart", onDragStart, true);
+  document.addEventListener("drop", onHtml5Drop, true);
   window.addEventListener("scroll", onScroll, true);
 
   // SPA navigation
