@@ -376,6 +376,40 @@ ${storageStateNote(withLogin[0])}
 
   /* ------------------------------ project files ------------------------------ */
 
+  function renderTimingReporter() {
+    return `// Prints how long each test took and a total for the run.
+// Wired up through \`reporter\` in playwright.config.js.
+const secs = (ms) => (ms / 1000).toFixed(2) + "s";
+
+export default class TimingReporter {
+  constructor() {
+    this.rows = [];
+  }
+
+  onTestEnd(test, result) {
+    this.rows.push({ title: test.title, ms: result.duration, status: result.status });
+  }
+
+  onEnd() {
+    if (!this.rows.length) return;
+    const total = this.rows.reduce((sum, r) => sum + r.ms, 0);
+    const avg = total / this.rows.length;
+
+    console.log("\\n  ⏱  Timing");
+    for (const r of this.rows) {
+      const mark = r.status === "passed" ? "✓" : "✗";
+      console.log("     " + secs(r.ms).padStart(8) + "  " + mark + " " + r.title);
+    }
+    // A sum of test durations — with workers > 1 the wall clock is shorter.
+    console.log(
+      "     TOTAL " + this.rows.length + " test(s) in " + secs(total) +
+        " (avg " + secs(avg) + ")\\n",
+    );
+  }
+}
+`;
+  }
+
   function renderConfig(model) {
     return `import { defineConfig, devices } from "@playwright/test";
 
@@ -387,7 +421,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   timeout: 60000,
   expect: { timeout: 10000 },
-  reporter: [["list"], ["html", { open: "never" }]],
+  reporter: [["list"], ["html", { open: "never" }], ["./support/timing-reporter.js"]],
 
   use: {
     baseURL: ${dq(model.baseUrl)},
@@ -443,7 +477,8 @@ export default defineConfig({
 - **Retries** — 1 locally, 2 on CI, before a test is reported as broken.
 - **Generous timeouts** — 60s per test, 10s per assertion, 15s per action.
 - **Trace + video on failure** — \`npx playwright show-trace\` replays the whole run step by step.
-- **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.`;
+- **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.
+- **Timing** — support/timing-reporter.js prints each test's duration and a run total (a sum of test durations; with several workers the wall clock is shorter).`;
 
   function renderReadme(model) {
     return `# ${model.suiteName}
@@ -536,6 +571,7 @@ ${ANTIFLAKE}
     files[`tests/${s}/${s}.spec.js`] = renderSpec(model);
     const auth = renderAuth([model]);
     if (auth) files["support/auth.js"] = auth;
+    files["support/timing-reporter.js"] = renderTimingReporter();
     files["playwright.config.js"] = renderConfig(model);
     files["package.json"] = renderPackageJson(model);
     files["README.md"] = renderReadme(model);
@@ -557,6 +593,7 @@ ${ANTIFLAKE}
 
     const auth = renderAuth(suiteModels);
     if (auth) files["support/auth.js"] = auth;
+    files["support/timing-reporter.js"] = renderTimingReporter();
     files["playwright.config.js"] = renderConfig({ baseUrl });
     files["package.json"] = renderPackageJson({ suiteName: projectName });
     files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl);

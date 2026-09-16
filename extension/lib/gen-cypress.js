@@ -424,6 +424,26 @@ ${blocks.join("\n\n")}
   function renderSupportE2E() {
     return `import "./commands";
 
+// How long each test took, and a total for the spec. The numbers are printed
+// in the terminal by the matching tasks in cypress.config.js.
+const timings = [];
+let startedAt = 0;
+
+beforeEach(() => {
+  startedAt = Date.now();
+});
+
+afterEach(function () {
+  const ms = Date.now() - startedAt;
+  timings.push(ms);
+  cy.task("timing:test", { title: this.currentTest.title, ms }, { log: false });
+});
+
+after(() => {
+  const total = timings.reduce((sum, ms) => sum + ms, 0);
+  cy.task("timing:total", { count: timings.length, total }, { log: false });
+});
+
 // Ignore app errors that are not the test's fault (keeps real failures).
 Cypress.on("uncaught:exception", () => false);
 
@@ -463,8 +483,24 @@ module.exports = defineConfig({
     viewportHeight: 1080,
     scrollBehavior: "center",
     experimentalMemoryManagement: true,
-    setupNodeEvents(on, config) {
-      // implement node event listeners here
+    setupNodeEvents(on) {
+      const secs = (ms) => (ms / 1000).toFixed(2) + "s";
+
+      // Printed from support/e2e.js as the run goes.
+      on("task", {
+        "timing:test"({ title, ms }) {
+          console.log("  ⏱  " + secs(ms).padStart(8) + "  " + title);
+          return null;
+        },
+        "timing:total"({ count, total }) {
+          const avg = count ? total / count : 0;
+          console.log(
+            "  ⏱  TOTAL " + count + " test(s) in " + secs(total) +
+              " (avg " + secs(avg) + ")",
+          );
+          return null;
+        },
+      });
     },
   },
 });
@@ -521,6 +557,7 @@ ${model.hasLogin ? "\n> The shared opening steps of every scenario were extracte
 - **Scoped text assertions** — \`cy.get(locator).should("contain", ...)\` instead of a bare \`cy.contains()\`.
 - **Login guard** — \`cy.${model.loginName}()\` asserts the URL changed before the test continues.
 - **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.
+- **Timing** — every test's duration and a per-spec total are printed in the terminal (support/e2e.js + the tasks in cypress.config.js).
 
 Next steps if a spec is still flaky:
 
@@ -574,6 +611,7 @@ ${rows}
 - **\`scrollBehavior: "center"\`** — elements are centred before Cypress acts, avoiding sticky-header overlaps.
 - **Scoped text assertions** — \`cy.get(locator).should("contain", ...)\` instead of a bare \`cy.contains()\`.
 - **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.
+- **Timing** — every test's duration and a per-spec total are printed in the terminal (support/e2e.js + the tasks in cypress.config.js).
 `;
   }
 

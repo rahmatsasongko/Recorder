@@ -417,6 +417,19 @@ function escapeAttr(s) {
   return String(s).replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
+// The Indonesian explanation + solution background.js attaches to a failed
+// play step (see diagnosePlayFailure in background.js), shown right under
+// the raw log line for that step.
+function renderDiagnosis(d) {
+  if (!d) return "";
+  return `
+    <div class="diag">
+      <div class="diag-title">${escapeHtml(d.judul || "Step gagal")}</div>
+      <div class="diag-row"><b>Penjelasan:</b> ${escapeHtml(d.penjelasan || "-")}</div>
+      <div class="diag-row"><b>Solusi:</b> ${escapeHtml(d.solusi || "-")}</div>
+    </div>`;
+}
+
 const DRAG_ACTIONS = ["drag", "drop", "resize"];
 
 function badgeClass(action) {
@@ -1232,6 +1245,7 @@ async function renderPlayback() {
                 ? `<span class="err ${r.status}">${escapeHtml(r.message)}</span>`
                 : ""
             }
+            ${r && r.status === "failed" && r.diagnosis ? renderDiagnosis(r.diagnosis) : ""}
           </span>
         </div>`);
     });

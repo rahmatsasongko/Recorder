@@ -979,13 +979,173 @@ async function doVisit(tabId, step) {
     }
     return { status: "passed", message: "visit " + step.url, ms: 0 };
   } catch (e) {
-    return { status: "failed", message: String((e && e.message) || e), ms: 0 };
+    return {
+      status: "failed",
+      message: String((e && e.message) || e),
+      code: "visit_failed",
+      ms: 0
+    };
   }
+}
+
+// Turns a failure/skip `code` (set by content/player.js, or by doVisit /
+// sendStep above) into an Indonesian { judul, penjelasan, solusi } for the
+// play log. Falls back to a generic entry for anything not in the table —
+// new codes should still show *something* useful, not a blank block.
+function diagnosePlayFailure(step, res) {
+  const sel = step.selector || "-";
+  const target = step.targetSelector || step.targetName || "-";
+  const val = step.value == null ? "" : String(step.value);
+  const url = step.url || "-";
+
+  const TABLE = {
+    no_selector: {
+      judul: "Step ini tidak punya selector",
+      penjelasan:
+        "Step tidak menyimpan selector elemen sama sekali, jadi player tidak tahu elemen mana yang harus dipakai.",
+      solusi:
+        "Buka step ini di editor skenario dan isi kolom Selector, atau rekam ulang step tersebut."
+    },
+    element_not_found: {
+      judul: "Elemen tidak ditemukan di halaman",
+      penjelasan: `Selector "${sel}" tidak cocok dengan elemen manapun saat step ini dijalankan. Biasanya karena halaman belum selesai dimuat, elemen berada di dalam iframe, atau markup halaman sudah berubah sejak direkam.`,
+      solusi:
+        "Pastikan halaman sudah termuat penuh sebelum step ini (tambahkan jeda/assert sebelumnya), pastikan elemen bukan di dalam iframe, atau rekam ulang step ini karena selector kemungkinan sudah berubah."
+    },
+    bad_selector: {
+      judul: "Selector tidak valid",
+      penjelasan: `"${sel}" bukan CSS selector yang sah, sehingga browser tidak bisa memprosesnya.`,
+      solusi: "Perbaiki selector pada step ini secara manual, atau rekam ulang step tersebut."
+    },
+    upload_skip: {
+      judul: "Upload file dilewati",
+      penjelasan:
+        "Browser tidak mengizinkan ekstensi mengisi dialog pilih file dari script, jadi step upload tidak bisa diputar langsung di tab.",
+      solusi:
+        'Gunakan tombol "Export" pada suite ini untuk menghasilkan proyek Cypress/Playwright/WebdriverIO, lalu jalankan di sana — upload file didukung penuh di ketiganya.'
+    },
+    file_input_skip: {
+      judul: "Klik pada input file dilewati",
+      penjelasan:
+        "Mengklik elemen ini akan membuka dialog pilih file bawaan OS, yang tidak bisa dikendalikan dari script sehingga akan membuat pemutaran macet.",
+      solusi:
+        'Gunakan tombol "Export" untuk menjalankan skenario ini lewat Cypress/Playwright/WebdriverIO, yang punya cara resmi mengisi file tanpa dialog.'
+    },
+    drag_no_distance: {
+      judul: "Step drag tidak punya jarak yang tersimpan",
+      penjelasan: "Jarak geser (dx, dy) pada step ini bernilai 0, jadi tidak ada gerakan yang bisa diputar ulang.",
+      solusi:
+        'Buka step ini di editor skenario, isi "Drag X (px)" / "Drag Y (px)" secara manual, atau rekam ulang drag-nya.'
+    },
+    drag_no_effect: {
+      judul: "Drag tidak berpengaruh",
+      penjelasan:
+        "Perintah drag sudah dijalankan, tetapi posisi elemen sama sekali tidak berubah — kemungkinan elemen sebenarnya tidak bisa digeser, atau widget di halaman butuh event tambahan yang tidak dihasilkan oleh pemutaran di tab.",
+      solusi:
+        'Pastikan elemen yang direkam memang bagian yang bisa digeser (drag handle), atau jalankan skenario ini lewat proyek Cypress/Playwright/WebdriverIO hasil "Export" — drag di sana memakai driver otomasi asli, bukan event tiruan.'
+    },
+    drop_no_target: {
+      judul: "Step drop tidak punya target",
+      penjelasan: "Step ini tidak menyimpan selector elemen tujuan drop.",
+      solusi: "Rekam ulang step drop ini, atau isi selector target secara manual di editor skenario."
+    },
+    drop_target_not_found: {
+      judul: "Target drop tidak ditemukan",
+      penjelasan: `Selector target "${target}" tidak cocok dengan elemen manapun di halaman saat ini.`,
+      solusi: "Rekam ulang step drop ini, atau perbaiki selector target di editor skenario."
+    },
+    resize_no_distance: {
+      judul: "Step resize tidak punya jarak yang tersimpan",
+      penjelasan: "Jarak geser (dx, dy) pada handle resize ini bernilai 0, jadi tidak ada perubahan ukuran yang bisa diputar ulang.",
+      solusi:
+        'Buka step ini di editor skenario, isi "Drag X (px)" / "Drag Y (px)" secara manual, atau rekam ulang resize-nya.'
+    },
+    resize_no_effect: {
+      judul: "Resize tidak berpengaruh",
+      penjelasan:
+        "Handle sudah digeser, tetapi ukuran elemen tidak berubah sama sekali — kemungkinan handle resize sudah tidak ada di posisi yang direkam.",
+      solusi:
+        'Cek apakah tampilan halaman berubah sejak direkam, rekam ulang resize-nya, atau jalankan lewat proyek hasil "Export".'
+    },
+    option_not_found: {
+      judul: "Opsi dropdown tidak ditemukan",
+      penjelasan: `Opsi dengan teks "${val}" yang direkam sudah tidak ada lagi di dropdown ini.`,
+      solusi: "Buka dropdown secara manual untuk melihat opsi yang tersedia sekarang, lalu perbarui Value pada step ini."
+    },
+    check_failed: {
+      judul: "Checkbox/radio gagal diubah",
+      penjelasan: "Klik pada elemen ini tidak mengubah status checked-nya seperti yang diharapkan.",
+      solusi: "Pastikan elemen tidak disabled, dan selectornya masih menunjuk ke checkbox/radio yang benar."
+    },
+    no_form: {
+      judul: "Tidak ada <form> untuk di-submit",
+      penjelasan: "Elemen target bukan bagian dari elemen <form>, sehingga aksi submit tidak bisa dijalankan.",
+      solusi: 'Ubah aksi step ini menjadi "click" pada tombolnya — kemungkinan yang terekam seharusnya klik tombol, bukan submit form.'
+    },
+    unsupported_action: {
+      judul: "Aksi ini belum didukung saat pemutaran di browser",
+      penjelasan: `Aksi "${step.action}" belum ada implementasinya di player.`,
+      solusi: "Hapus atau ubah step ini di editor skenario. Kode generate (Cypress/Playwright/WebdriverIO) tetap mendukungnya bila didukung frameworknya."
+    },
+    url_mismatch: {
+      judul: "URL tidak sesuai harapan",
+      penjelasan: `URL halaman saat ini tidak mengandung "${val}" seperti yang diharapkan assertion ini.`,
+      solusi: "Cek apakah alur navigasi sebelumnya berhasil, atau perbarui nilai yang diharapkan pada step assertion ini."
+    },
+    text_not_found: {
+      judul: "Teks yang diharapkan tidak ditemukan",
+      penjelasan: sel !== "-"
+        ? `Elemen "${sel}" ditemukan, tetapi tidak mengandung teks "${val}" seperti yang diharapkan.`
+        : `Halaman tidak mengandung teks "${val}" seperti yang diharapkan.`,
+      solusi: "Cek apakah teks di halaman sudah berubah sejak direkam, lalu perbarui nilai assertion pada step ini."
+    },
+    value_mismatch: {
+      judul: "Nilai elemen tidak sesuai harapan",
+      penjelasan: `Nilai elemen saat ini tidak sama dengan "${val}" seperti yang diharapkan assertion ini.`,
+      solusi: "Cek apakah step-step sebelumnya benar-benar mengisi nilai yang diharapkan, atau perbarui nilai assertion ini."
+    },
+    not_visible: {
+      judul: "Elemen ditemukan tapi tidak terlihat",
+      penjelasan:
+        "Elemen ada di halaman, namun sedang tersembunyi (display:none, ukurannya 0, atau di luar layar) sehingga assertion \"visible\" gagal.",
+      solusi:
+        'Tambahkan step untuk membuka/scroll ke elemen tersebut sebelum assertion ini, atau ganti jadi assertion "exist" bila elemen memang boleh tersembunyi.'
+    },
+    visit_failed: {
+      judul: "Gagal membuka halaman",
+      penjelasan: `Terjadi error saat berpindah ke "${url}": ${res.message || "-"}.`,
+      solusi: "Pastikan URL tersebut masih valid dan bisa diakses, cek koneksi internet, lalu klik Play lagi."
+    },
+    no_response: {
+      judul: "Tab tidak merespons",
+      penjelasan:
+        "Ekstensi mengirim perintah ke tab yang direkam, tetapi tidak ada balasan dalam waktu yang ditentukan — biasanya karena halaman sedang memuat ulang, macet, atau tabnya sudah ditutup.",
+      solusi: "Reload tab yang sedang diputar, lalu klik Play lagi. Jika masih terjadi, tutup dan buka ulang tab tersebut."
+    },
+    no_result: {
+      judul: "Tidak ada hasil dari halaman",
+      penjelasan: "Script di dalam tab tidak mengembalikan hasil apapun untuk step ini.",
+      solusi: "Reload halaman yang sedang diputar, lalu jalankan Play lagi."
+    },
+    js_error: {
+      judul: "Terjadi error saat menjalankan step",
+      penjelasan: `Script pemutaran mengalami error tak terduga: ${res.message || "-"}.`,
+      solusi: "Reload halaman lalu coba Play lagi. Jika terus terjadi, kemungkinan ada perubahan besar di halaman yang membuat step ini tidak relevan lagi — pertimbangkan merekam ulang."
+    }
+  };
+
+  return (
+    TABLE[res.code] || {
+      judul: "Step gagal dijalankan",
+      penjelasan: res.message || "Tidak ada rincian tambahan untuk kegagalan ini.",
+      solusi: "Cek kembali step ini di editor skenario, atau rekam ulang bila halaman sudah berubah."
+    }
+  );
 }
 
 async function pushResult(step, res) {
   const pb = await getPlayback();
-  pb.results.push({
+  const entry = {
     scenarioIndex: pb.scenarioIndex,
     stepIndex: pb.stepIndex,
     action: step.action,
@@ -993,7 +1153,13 @@ async function pushResult(step, res) {
     status: res.status,
     message: res.message || "",
     ms: res.ms || 0
-  });
+  };
+  // Skips are deliberate ("can't do this in-browser, use the export")
+  // rather than errors, so only failures get the full log breakdown.
+  if (res.status === "failed") {
+    entry.diagnosis = diagnosePlayFailure(step, res);
+  }
+  pb.results.push(entry);
   await setPlayback(pb);
 }
 
@@ -1007,7 +1173,7 @@ async function markSkipped(sc, from) {
       action: st.action,
       name: st.elementName || st.url || st.action,
       status: "skipped",
-      message: "",
+      message: "Dilewati karena step sebelumnya gagal.",
       ms: 0
     });
   }
@@ -1118,13 +1284,14 @@ async function runPlayback(gen) {
                 status: "failed",
                 message:
                   "the page did not respond — reload the page, then Play again",
+                code: "no_response",
                 ms: 0
               };
         }
       }
 
       if (!res || !res.status) {
-        res = { status: "failed", message: "no result from page", ms: 0 };
+        res = { status: "failed", message: "no result from page", code: "no_result", ms: 0 };
       }
       await pushResult(step, res);
 

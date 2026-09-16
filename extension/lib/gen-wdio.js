@@ -358,7 +358,12 @@ module.exports = { ${names.join(", ")} };
   /* ------------------------------ project files ------------------------------ */
 
   function renderConfig(model) {
-    return `exports.config = {
+    return `// How long each test took. Collected and printed inside the worker —
+// onComplete() runs in the launcher process and would not see these.
+const timings = [];
+const secs = (ms) => (ms / 1000).toFixed(2) + "s";
+
+exports.config = {
   runner: "local",
   specs: ["./test/specs/**/*.spec.js"],
   exclude: [],
@@ -388,6 +393,23 @@ module.exports = { ${names.join(", ")} };
   mochaOpts: {
     ui: "bdd",
     timeout: 90000,
+  },
+
+  afterTest(test, context, { duration, passed }) {
+    timings.push({ title: test.title, ms: duration, passed });
+    console.log(
+      "  ⏱  " + secs(duration).padStart(8) + "  " + (passed ? "✓" : "✗") + " " + test.title,
+    );
+  },
+
+  after() {
+    if (!timings.length) return;
+    const total = timings.reduce((sum, t) => sum + t.ms, 0);
+    const avg = total / timings.length;
+    console.log(
+      "  ⏱  TOTAL " + timings.length + " test(s) in " + secs(total) +
+        " (avg " + secs(avg) + ")",
+    );
   },
 };
 `;
@@ -429,7 +451,8 @@ module.exports = { ${names.join(", ")} };
   const ANTIFLAKE = `- **Auto-waiting assertions** — \`expect($(...)).toBeDisplayed()\` from expect-webdriverio retries until \`waitforTimeout\`.
 - **Spec retries** — \`specFileRetries: 1\` re-runs a failed spec once before reporting it.
 - **Generous timeouts** — 15s for element waits, 90s per test.
-- **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.`;
+- **Stable selectors** — \`data-*\` → \`id\` → \`name\` → \`aria-label\` → stable content attrs; unstable ones flagged in the locator file.
+- **Timing** — the afterTest / after hooks in wdio.conf.js print each test's duration and a total per session.`;
 
   function renderReadme(model) {
     return `# ${model.suiteName}

@@ -180,9 +180,12 @@
    * Actions — each returns { status, message?, el? }
    * ---------------------------------------------------------------------- */
 
+  // `code` is a stable identifier for WHY the step failed — background.js
+  // turns it into an Indonesian explanation + solution for the play log.
+  // `message` stays the short technical line for anyone reading raw logs.
   const ok = (el, message) => ({ status: "passed", message: message || "", el });
-  const bad = (message, el) => ({ status: "failed", message, el: el || null });
-  const skip = (message, el) => ({ status: "skipped", message, el: el || null });
+  const bad = (message, el, code) => ({ status: "failed", message, el: el || null, code });
+  const skip = (message, el, code) => ({ status: "skipped", message, el: el || null, code });
 
   async function runAction(step) {
     const a = step.action;
@@ -201,11 +204,12 @@
     if (a === "upload") {
       return skip(
         `upload "${truncate(step.value)}" dilewati — jalankan lewat Cypress (cy.selectFile + fixture)`,
-        resolveEl(step.selector, step.selectorType, step.tagName)
+        resolveEl(step.selector, step.selectorType, step.tagName),
+        "upload_skip"
       );
     }
 
-    if (!step.selector) return bad(`no selector for ${a}`);
+    if (!step.selector) return bad(`no selector for ${a}`, null, "no_selector");
 
     const needVisible = a === "click" || a === "type" || a === "clear" || a === "select";
     const el = await waitForEl(step.selector, {
@@ -213,11 +217,11 @@
       type: step.selectorType,
       tag: step.tagName
     });
-    if (!el) return bad(`element not found: ${step.selector}`);
+    if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
 
     // Clicking a file input opens the native picker and stalls playback.
     if (el.tagName === "INPUT" && el.type === "file") {
-      return skip("klik file input dilewati (butuh Cypress cy.selectFile)", el);
+      return skip("klik file input dilewati (butuh Cypress cy.selectFile)", el, "file_input_skip");
     }
 
     try {
@@ -230,7 +234,7 @@
       case "drag": {
         const dx = Number(step.dx) || 0;
         const dy = Number(step.dy) || 0;
-        if (!dx && !dy) return skip("drag has no recorded distance", el);
+        if (!dx && !dy) return skip("drag has no recorded distance", el, "drag_no_distance");
         const before = el.getBoundingClientRect();
         await dragBy(el, dx, dy);
         await sleep(120);
@@ -239,19 +243,20 @@
           Math.round(before.left) === Math.round(after.left) &&
           Math.round(before.top) === Math.round(after.top)
         ) {
-          return bad("drag had no effect — the element did not move", el);
+          return bad("drag had no effect — the element did not move", el, "drag_no_effect");
         }
         return ok(el, `dragged ${dx}, ${dy}`);
       }
 
       case "drop": {
-        if (!step.targetSelector) return bad("drop has no target selector", el);
+        if (!step.targetSelector) return bad("drop has no target selector", el, "drop_no_target");
         const target = await waitForEl(step.targetSelector, {
           visible: true,
           type: step.targetSelectorType,
           tag: step.targetTagName
         });
-        if (!target) return bad(`drop target not found: ${step.targetSelector}`, el);
+        if (!target)
+          return bad(`drop target not found: ${step.targetSelector}`, el, "drop_target_not_found");
         if (step.dnd === "html5") {
           html5DragOnto(el, target);
         } else {
@@ -264,7 +269,7 @@
       case "resize": {
         const dx = Number(step.dx) || 0;
         const dy = Number(step.dy) || 0;
-        if (!dx && !dy) return skip("resize has no recorded distance", el);
+        if (!dx && !dy) return skip("resize has no recorded distance", el, "resize_no_distance");
         const box = el.parentElement || el;
         const before = box.getBoundingClientRect();
         await dragBy(el, dx, dy);
@@ -273,7 +278,7 @@
         const w = Math.round(after.width);
         const h = Math.round(after.height);
         if (Math.round(before.width) === w && Math.round(before.height) === h) {
-          return bad(`resize had no effect — still ${w}x${h}`, el);
+          return bad(`resize had no effect — still ${w}x${h}`, el, "resize_no_effect");
         }
         return ok(el, `resized to ${w}x${h}`);
       }
@@ -320,7 +325,7 @@
           opts.find((o) => o.text.trim() === want) ||
           opts.find((o) => o.value === want) ||
           opts.find((o) => o.text.trim().includes(want));
-        if (!opt) return bad(`option not found: "${want}"`, el);
+        if (!opt) return bad(`option not found: "${want}"`, el, "option_not_found");
         el.value = opt.value;
         fireInput(el);
         return ok(el, `selected "${opt.text.trim()}"`);
@@ -334,12 +339,14 @@
           el.checked = target;
           el.dispatchEvent(new Event("change", { bubbles: true }));
         }
-        return el.checked === target ? ok(el, a + "ed") : bad(`could not ${a}`, el);
+        return el.checked === target
+          ? ok(el, a + "ed")
+          : bad(`could not ${a}`, el, "check_failed");
       }
 
       case "submit": {
         const form = el.tagName === "FORM" ? el : el.closest("form");
-        if (!form) return bad("no <form> to submit", el);
+        if (!form) return bad("no <form> to submit", el, "no_form");
         if (form.requestSubmit) form.requestSubmit();
         else form.submit();
         return ok(el, "submitted");
@@ -361,7 +368,7 @@
       }
 
       default:
-        return bad(`unsupported action: ${a}`, el);
+        return bad(`unsupported action: ${a}`, el, "unsupported_action");
     }
   }
 
@@ -374,7 +381,7 @@
       const hay = location.href + " " + location.pathname;
       return hay.includes(val)
         ? ok(null, `url includes "${val}"`)
-        : bad(`url "${location.pathname}" does not include "${val}"`);
+        : bad(`url "${location.pathname}" does not include "${val}"`, null, "url_mismatch");
     }
 
     if (type === "contain") {
@@ -384,7 +391,7 @@
         const text = norm(document.body.innerText || document.body.textContent);
         return text.includes(val)
           ? ok(null, `page contains "${truncate(val)}"`)
-          : bad(`page does not contain "${truncate(val)}"`);
+          : bad(`page does not contain "${truncate(val)}"`, null, "text_not_found");
       }
       // cy.contains(selector, text): any element matching the selector whose
       // text includes the value — not just the first one.
@@ -393,23 +400,24 @@
       try {
         matches = Array.from(document.querySelectorAll(step.selector));
       } catch (e) {
-        return bad(`bad selector: ${step.selector}`);
+        return bad(`bad selector: ${step.selector}`, null, "bad_selector");
       }
-      if (!matches.length) return bad(`element not found: ${step.selector}`);
+      if (!matches.length)
+        return bad(`element not found: ${step.selector}`, null, "element_not_found");
       const hit = matches.find((el) => norm(el.innerText || el.textContent).includes(val));
       if (hit) return ok(hit, `contains "${truncate(val)}"`);
-      return bad(`no ${step.selector} contains "${truncate(val)}"`, matches[0]);
+      return bad(`no ${step.selector} contains "${truncate(val)}"`, matches[0], "text_not_found");
     }
 
-    if (!step.selector) return bad("no selector for assertion");
+    if (!step.selector) return bad("no selector for assertion", null, "no_selector");
 
     if (type === "value") {
       const el = await waitForEl(step.selector, { type: step.selectorType, tag: step.tagName });
-      if (!el) return bad(`element not found: ${step.selector}`);
+      if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
       const actual = el.value == null ? "" : String(el.value);
       return actual === val
         ? ok(el, `value is "${truncate(val)}"`)
-        : bad(`value is "${truncate(actual)}", expected "${truncate(val)}"`, el);
+        : bad(`value is "${truncate(actual)}", expected "${truncate(val)}"`, el, "value_mismatch");
     }
 
     // visible | exist
@@ -418,8 +426,8 @@
       type: step.selectorType,
       tag: step.tagName
     });
-    if (!el) return bad(`element not found: ${step.selector}`);
-    if (type === "visible" && !isVisible(el)) return bad("element is not visible", el);
+    if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
+    if (type === "visible" && !isVisible(el)) return bad("element is not visible", el, "not_visible");
     return ok(el, type === "visible" ? "is visible" : "exists");
   }
 
@@ -550,9 +558,9 @@
       } catch (e) {}
       res = await runAction(step);
     } catch (e) {
-      res = { status: "failed", message: String((e && e.message) || e), el: null };
+      res = { status: "failed", message: String((e && e.message) || e), code: "js_error", el: null };
     }
-    if (!res || !res.status) res = { status: "failed", message: "no result", el: null };
+    if (!res || !res.status) res = { status: "failed", message: "no result", code: "no_result", el: null };
     const ms = Math.round(performance.now() - t0);
     const good = res.status !== "failed";
     try {
@@ -560,13 +568,18 @@
       if (res.status === "failed") showToast(`✗  ${step.action}  —  ${res.message}`, false);
       else if (res.status === "skipped") showToast(`⤼  ${step.action}  —  ${res.message}`);
     } catch (e) {}
-    return { status: res.status, message: res.message || "", ms };
+    return { status: res.status, message: res.message || "", code: res.code || null, ms };
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "PLAY_STEP") {
       execStep(msg).then(sendResponse, (e) =>
-        sendResponse({ status: "failed", message: String((e && e.message) || e), ms: 0 })
+        sendResponse({
+          status: "failed",
+          message: String((e && e.message) || e),
+          code: "js_error",
+          ms: 0
+        })
       );
       return true;
     }
