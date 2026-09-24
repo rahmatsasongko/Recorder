@@ -1,6 +1,11 @@
 // Background service worker — owns the recording session.
 // A session holds a Test Suite made of many Scenarios; each scenario has steps.
 
+// Keep in sync with lib/gen-core.js and content/player.js — same rule for
+// "does this upload get swapped for the bundled fixture", just applied here
+// at record time instead of at generate/play time.
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|avif|svg)$/i;
+
 const DEFAULT_SESSION = {
   active: false,
   paused: false,
@@ -13,8 +18,26 @@ const DEFAULT_SESSION = {
   pausedAt: null,
   lastUrl: null,
   scenarios: [], // [{ id, name, steps: [], saved }]
-  recordingIndex: -1
+  recordingIndex: -1,
+  hasIframes: false // set by content.js when the recorded page has iframes we can't instrument
 };
+
+// chrome.storage.local.set() can fail silently (e.g. QUOTA_BYTES_PER_ITEM /
+// QUOTA_BYTES exceeded on a very large session) — chrome.runtime.lastError is
+// the only signal, and it's easy to lose if nobody checks it. Every write in
+// this file goes through here so a full storage means a visible error
+// response instead of quietly-lost steps.
+function storageSet(obj) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(obj, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message || "storage error"));
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 const DEFAULT_PLAYBACK = {
   active: false,
@@ -32,15 +55,58 @@ const DEFAULT_PLAYBACK = {
 
 let playGen = 0; // bumped on every start/stop so a stale loop can bail
 let ticking = false;
+// The generation of a run that was requested while another loop was still on
+// the stack. The multi-suite queue starts the next suite from inside
+// finishPlayback() — while the previous suite's loop is still unwinding — and
+// that runPlayback() call used to be thrown away by the `ticking` guard. The
+// new run then sat marked active with nobody driving it, until something
+// happened to poll PLAY_STATE (only the popup does, and it closes the moment
+// the played tab takes focus). runPlayback() now remembers the request and
+// honours it once the current loop is done.
+let pendingRun = null;
 
 async function getSession() {
   const { session } = await chrome.storage.local.get("session");
   return session || { ...DEFAULT_SESSION };
 }
 
+// What the on-page overlay polls twice a second: enough to draw the timer and
+// the step counter without reading — or shipping back — every scenario and
+// step of the session. Written in the same set() as `session`, so the two
+// can never disagree.
+function metaOf(session) {
+  const sc = (session.scenarios || [])[session.recordingIndex];
+  return {
+    active: !!session.active,
+    paused: !!session.paused,
+    tabId: session.tabId == null ? null : session.tabId,
+    startTime: session.startTime || null,
+    pausedAccum: session.pausedAccum || 0,
+    pausedAt: session.pausedAt || null,
+    stepCount: sc ? (sc.steps || []).length : 0
+  };
+}
+
 async function setSession(session) {
-  await chrome.storage.local.set({ session });
+  await storageSet({ session, sessionMeta: metaOf(session) });
   return session;
+}
+
+async function overlayState(sender) {
+  let { sessionMeta: meta } = await chrome.storage.local.get("sessionMeta");
+  // Storage written before this key existed: derive it from the session.
+  if (!meta) meta = metaOf(await getSession());
+  const isThisTab = !!(sender.tab && meta.tabId === sender.tab.id);
+  return {
+    active: meta.active,
+    paused: meta.paused,
+    isThisTab,
+    recording: meta.active && !meta.paused && (isThisTab || !sender.tab),
+    startTime: meta.startTime,
+    pausedAccum: meta.pausedAccum,
+    pausedAt: meta.pausedAt,
+    stepCount: meta.stepCount
+  };
 }
 
 async function getPlayback() {
@@ -49,7 +115,7 @@ async function getPlayback() {
 }
 
 async function setPlayback(playback) {
-  await chrome.storage.local.set({ playback });
+  await storageSet({ playback });
   return playback;
 }
 
@@ -63,7 +129,7 @@ async function getSuiteQueue() {
 }
 
 async function setSuiteQueue(queue) {
-  await chrome.storage.local.set({ suitePlayQueue: queue });
+  await storageSet({ suitePlayQueue: queue });
   return queue;
 }
 
@@ -80,7 +146,7 @@ async function getSuites() {
 }
 
 async function setSuites(suites) {
-  await chrome.storage.local.set({ suites });
+  await storageSet({ suites });
   return suites;
 }
 
@@ -90,7 +156,7 @@ async function getActiveSuiteId() {
 }
 
 async function setActiveSuiteId(id) {
-  await chrome.storage.local.set({ activeSuiteId: id || null });
+  await storageSet({ activeSuiteId: id || null });
 }
 
 // Upserts the current session's suite fields into the library under
@@ -133,14 +199,7 @@ async function doSwitchSuite(id) {
   }
   playGen++;
   if (session.active && session.tabId != null) {
-    try {
-      await chrome.tabs.sendMessage(session.tabId, {
-        type: "STATE_CHANGED",
-        recording: false
-      });
-    } catch (e) {
-      /* tab gone / not ready */
-    }
+    await notifyTab(session.tabId, { type: "STATE_CHANGED", recording: false });
   }
   // Save the suite being left before swapping it out.
   await syncActiveSuite(session);
@@ -155,7 +214,7 @@ async function doSwitchSuite(id) {
   };
   await setActiveSuiteId(target.id);
   await setSession(loaded);
-  await chrome.storage.local.set({
+  await storageSet({
     playback: { ...DEFAULT_PLAYBACK },
     lastPlay: {}
   });
@@ -297,15 +356,23 @@ function newScenario(name, count) {
   };
 }
 
+// Tells the recorded tab something and does not care about an answer. Bounded
+// on purpose: handlers run one at a time (see serialize), so a tab that never
+// replies — a page stuck in a script loop — must not hold every later message
+// hostage with it. Gone, not ready or slow all just mean "skip".
+async function notifyTab(tabId, msg) {
+  try {
+    await sendToTab(tabId, msg, 2000);
+  } catch (e) {
+    /* tab gone / content script not ready / not answering */
+  }
+}
+
 async function broadcastState() {
   const session = await getSession();
   const recording = session.active && !session.paused;
   if (session.tabId == null) return;
-  try {
-    await chrome.tabs.sendMessage(session.tabId, { type: "STATE_CHANGED", recording });
-  } catch (e) {
-    /* content script not ready */
-  }
+  await notifyTab(session.tabId, { type: "STATE_CHANGED", recording });
 }
 
 async function ensureRecordingTab(session) {
@@ -327,17 +394,59 @@ async function ensureRecordingTab(session) {
   return tab.id;
 }
 
+// Nearly every handler is a read-modify-write of chrome.storage.local: read
+// `session`, change it, write the whole object back. Two of those running at
+// once lose data — both read the same snapshot and the later write discards
+// the earlier one. content.js sends `type` and then `keydown` back to back,
+// and a Stop from the on-page overlay right after the last ADD_STEP has the
+// same shape (either write can undo the other: the step goes missing, or the
+// Stop is reverted). So handlers run strictly one at a time, in the order
+// they arrived.
+//
+// Only top-level entry points may call serialize(): a task that waited on
+// another serialize()d task would wait on itself.
+let taskQueue = Promise.resolve();
+function serialize(task) {
+  const run = taskQueue.then(task);
+  taskQueue = run.catch(() => {}); // a failed task must not wedge the queue
+  return run;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  (async () => {
+  // Read-only and polled twice a second — no reason to make it wait behind a
+  // burst of writes, and it reads its own small key, not the whole session.
+  if (msg && msg.type === "OVERLAY_STATE") {
+    overlayState(sender).then(sendResponse, () => sendResponse(null));
+    return true;
+  }
+  serialize(async () => {
+    try {
+      await handleMessage(msg, sender, sendResponse);
+    } catch (e) {
+      // Most commonly a full/broken chrome.storage.local (see storageSet) —
+      // surface it instead of leaving the popup waiting on a response that
+      // will never come.
+      sendResponse({ ok: false, reason: "storage_error", message: String((e && e.message) || e) });
+    }
+  });
+  return true;
+});
+
+async function handleMessage(msg, sender, sendResponse) {
     const session = await getSession();
 
     switch (msg.type) {
       case "GET_STATE": {
-        const isThisTab = sender.tab && session.tabId === sender.tab.id;
+        const isThisTab = !!(sender.tab && session.tabId === sender.tab.id);
         sendResponse({
           ...session,
           recording:
-            session.active && !session.paused && (isThisTab || !sender.tab)
+            session.active && !session.paused && (isThisTab || !sender.tab),
+          // Distinct from `recording` (which is also false while paused) —
+          // content.js's on-page overlay needs to know "is this the recorded
+          // tab" independently of pause state, so a paused recording still
+          // shows its controls only on the right tab.
+          isThisTab
         });
         return;
       }
@@ -423,6 +532,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const str = (v, d) => (typeof v === "string" && v ? v : d);
         const suites = await getSuites();
+        // Import used to always create a new suite even when one with the
+        // exact same name already existed, so importing the same bundle
+        // twice (or a bundle sharing names with what's already here) left
+        // ambiguous duplicates in the library with no way to tell them
+        // apart. Auto-suffix instead — the data still gets in, just under a
+        // name that's unique.
+        const uniqueSuiteName = (name) => {
+          const taken = new Set(suites.map((s) => (s.suiteName || "").trim().toLowerCase()));
+          if (!taken.has(name.trim().toLowerCase())) return name;
+          let n = 2;
+          while (taken.has((name + " (" + n + ")").trim().toLowerCase())) n++;
+          return name + " (" + n + ")";
+        };
         let added = 0;
         for (const rawSuite of raw) {
           const rs = rawSuite && typeof rawSuite === "object" ? rawSuite : {};
@@ -440,7 +562,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           suites.push({
             id: newSuiteId(),
             projectName: str(rs.projectName, "MyProject"),
-            suiteName: str(rs.suiteName, "Imported Suite " + (added + 1)),
+            suiteName: uniqueSuiteName(str(rs.suiteName, "Imported Suite " + (added + 1))),
             targetUrl: str(rs.targetUrl, ""),
             scenarios,
             updatedAt: Date.now()
@@ -476,18 +598,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (activeId === msg.id) {
           playGen++;
           if (session.active && session.tabId != null) {
-            try {
-              await chrome.tabs.sendMessage(session.tabId, {
-                type: "STATE_CHANGED",
-                recording: false
-              });
-            } catch (e) {
-              /* tab gone / not ready */
-            }
+            await notifyTab(session.tabId, { type: "STATE_CHANGED", recording: false });
           }
           await setActiveSuiteId(null);
           await setSession({ ...DEFAULT_SESSION });
-          await chrome.storage.local.set({
+          await storageSet({
             playback: { ...DEFAULT_PLAYBACK },
             lastPlay: {}
           });
@@ -629,7 +744,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // can still be reopened from "All suites".
         await setActiveSuiteId(null);
         await setSession({ ...DEFAULT_SESSION });
-        await chrome.storage.local.set({
+        await storageSet({
           playback: { ...DEFAULT_PLAYBACK },
           lastPlay: {},
           suitePlayQueue: null
@@ -650,14 +765,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         playGen++;
         // Tell a still-live recording tab to stop before we drop the session.
         if (session.active && session.tabId != null) {
-          try {
-            await chrome.tabs.sendMessage(session.tabId, {
-              type: "STATE_CHANGED",
-              recording: false
-            });
-          } catch (e) {
-            /* tab gone / not ready */
-          }
+          await notifyTab(session.tabId, { type: "STATE_CHANGED", recording: false });
         }
         // Preserve whatever suite was already open before replacing it.
         await syncActiveSuite(session);
@@ -685,7 +793,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await setActiveSuiteId(newSuiteId());
         await setSession(imported);
         await syncActiveSuite(imported);
-        await chrome.storage.local.set({
+        await storageSet({
           playback: { ...DEFAULT_PLAYBACK },
           lastPlay: {}
         });
@@ -762,6 +870,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
+      case "IFRAME_WARNING": {
+        // content.js detected an <iframe> on the recorded page — elements
+        // inside it can't be recorded or replayed (all_frames:false), so the
+        // popup shows a heads-up banner while recording instead of only
+        // failing reactively at playback time.
+        if (session.active && sender.tab && sender.tab.id === session.tabId && !session.hasIframes) {
+          session.hasIframes = true;
+          await setSession(session);
+        }
+        sendResponse({ ok: true });
+        return;
+      }
+
       case "ADD_STEP": {
         if (!session.active || session.paused) {
           sendResponse({ ok: false, reason: "not recording" });
@@ -784,6 +905,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           session.lastUrl = step.url;
         }
+        // Recorded upload steps only ever hold the picked file's NAME (never
+        // its bytes — see gen-core.js), so an image upload has nothing real
+        // to point at later. Normalize it to the fixture we actually ship
+        // (fixtures/tije-test-logo.png) right at record time, so the editor,
+        // in-browser playback and generated code all agree on one value
+        // instead of each silently substituting it independently.
+        if (step.action === "upload" && IMAGE_EXT.test(step.value || "")) {
+          step.value = "tije-test-logo.png";
+          step.files = ["tije-test-logo.png"];
+        }
         step.id = stepId(sc.steps.length);
         step.timestamp = new Date().toISOString();
         sc.steps.push(step);
@@ -795,9 +926,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       default:
         sendResponse({ ok: false, reason: "unknown message" });
     }
-  })();
-  return true;
-});
+}
 
 /* ---------------------------- playback driver ---------------------------- */
 
@@ -919,6 +1048,39 @@ async function sendStep(tabId, step, n, total) {
   }
 }
 
+// A click / submit / keypress that navigates tears the page down before the
+// player can answer, so "no reply" is expected for those — but it is also
+// exactly what a hung or crashed tab looks like. What tells them apart is
+// whether the tab really started loading something while the step ran, so
+// watch for that from before the step is sent.
+const NAVIGATING_ACTIONS = ["click", "submit", "keydown"];
+const NAV_GRACE_MS = 1500; // how long to keep looking once no reply has come
+
+function watchNavigation(tabId) {
+  const watch = { seen: false };
+  const onUpd = (id, info) => {
+    if (id === tabId && (info.status === "loading" || info.url)) watch.seen = true;
+  };
+  chrome.tabs.onUpdated.addListener(onUpd);
+  watch.stop = () => chrome.tabs.onUpdated.removeListener(onUpd);
+  return watch;
+}
+
+async function navigationStarted(watch, tabId) {
+  const deadline = Date.now() + NAV_GRACE_MS;
+  while (true) {
+    if (watch.seen) return true;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === "loading") return true;
+    } catch (e) {
+      return false; // the tab is gone — not a navigation
+    }
+    if (Date.now() >= deadline) return false;
+    await delay(100);
+  }
+}
+
 function waitForComplete(tabId, cap = 25000) {
   return new Promise((resolve) => {
     let done = false;
@@ -992,10 +1154,15 @@ async function doVisit(tabId, step) {
 // sendStep above) into an Indonesian { judul, penjelasan, solusi } for the
 // play log. Falls back to a generic entry for anything not in the table —
 // new codes should still show *something* useful, not a blank block.
-function diagnosePlayFailure(step, res) {
+function diagnosePlayFailure(step, res, hadSkippedUploadBefore) {
   const sel = step.selector || "-";
   const target = step.targetSelector || step.targetName || "-";
-  const val = step.value == null ? "" : String(step.value);
+  // An assertion keeps what it expects in `assertion.value`; `value` is null
+  // for it, which used to print empty quotes in every failed-assertion message.
+  // A password never goes into the log (it is shown in the popup).
+  const raw = step.action === "assert" ? (step.assertion || {}).value : step.value;
+  const secret = step.sensitive === true || step.inputType === "password";
+  const val = secret ? "••••••" : raw == null ? "" : String(raw);
   const url = step.url || "-";
 
   const TABLE = {
@@ -1134,13 +1301,35 @@ function diagnosePlayFailure(step, res) {
     }
   };
 
-  return (
-    TABLE[res.code] || {
-      judul: "Step gagal dijalankan",
-      penjelasan: res.message || "Tidak ada rincian tambahan untuk kegagalan ini.",
-      solusi: "Cek kembali step ini di editor skenario, atau rekam ulang bila halaman sudah berubah."
-    }
-  );
+  const base = TABLE[res.code] || {
+    judul: "Step gagal dijalankan",
+    penjelasan: res.message || "Tidak ada rincian tambahan untuk kegagalan ini.",
+    solusi: "Cek kembali step ini di editor skenario, atau rekam ulang bila halaman sudah berubah."
+  };
+
+  // A step that depends on UI which only appears after a real file upload
+  // (a crop/preview dialog, an "attachment added" panel, ...) will always
+  // fail to find its element in the live tab, because upload itself was
+  // already skipped a few steps earlier (browsers block scripts from
+  // filling the native file picker — see upload_skip above). The generic
+  // "iframe or stale selector" explanation is technically true but points
+  // the user at the wrong fix here, so call out the real cause directly.
+  if (hadSkippedUploadBefore && (res.code === "element_not_found" || res.code === "not_visible")) {
+    return {
+      judul: base.judul,
+      penjelasan:
+        base.penjelasan +
+        " Kemungkinan besar penyebabnya: skenario ini punya step upload file lebih awal yang dilewati " +
+        "(browser tidak mengizinkan ekstensi mengisi file picker), jadi UI yang seharusnya muncul setelah " +
+        "upload — misalnya dialog crop/preview gambar — tidak pernah terbuka, dan step ini tidak menemukan apapun.",
+      solusi:
+        'Ini bukan sesuatu yang bisa diperbaiki lewat "Play in browser" — jalankan skenario ini lewat proyek ' +
+        'hasil "Export" (Cypress/Playwright/WebdriverIO) dengan file gambar asli sebagai fixture. Di sana upload ' +
+        "berjalan dengan file sungguhan, jadi dialog crop/preview akan terbuka normal dan step-step setelahnya bisa jalan."
+    };
+  }
+
+  return base;
 }
 
 async function pushResult(step, res) {
@@ -1157,7 +1346,10 @@ async function pushResult(step, res) {
   // Skips are deliberate ("can't do this in-browser, use the export")
   // rather than errors, so only failures get the full log breakdown.
   if (res.status === "failed") {
-    entry.diagnosis = diagnosePlayFailure(step, res);
+    const hadSkippedUploadBefore = pb.results.some(
+      (r) => r.scenarioIndex === pb.scenarioIndex && r.action === "upload" && r.status === "skipped"
+    );
+    entry.diagnosis = diagnosePlayFailure(step, res, hadSkippedUploadBefore);
   }
   pb.results.push(entry);
   await setPlayback(pb);
@@ -1196,7 +1388,7 @@ async function recordScenarioResult(sc) {
       at: Date.now()
     };
   }
-  await chrome.storage.local.set({ lastPlay: map });
+  await storageSet({ lastPlay: map });
 }
 
 async function finishPlayback() {
@@ -1232,7 +1424,10 @@ async function nextScenario(session) {
 }
 
 async function runPlayback(gen) {
-  if (ticking) return;
+  if (ticking) {
+    pendingRun = gen; // the latest request wins; see the finally block
+    return;
+  }
   ticking = true;
   try {
     // Position the tab for the very first step of a fresh run.
@@ -1275,23 +1470,30 @@ async function runPlayback(gen) {
       if (step.action === "visit") {
         res = await doVisit(pb.tabId, step);
       } else {
+        const nav = watchNavigation(pb.tabId);
         try {
           res = await sendStep(pb.tabId, step, pb.stepIndex + 1, total);
         } catch (e) {
-          res = ["click", "submit", "keydown"].includes(step.action)
-            ? { status: "passed", message: "(page navigated)", ms: 0 }
-            : {
-                status: "failed",
-                message:
-                  "the page did not respond — reload the page, then Play again",
-                code: "no_response",
-                ms: 0
-              };
+          // No reply. Only a step that can navigate, on a tab that really did
+          // start navigating, counts as passed; anything else is a hung,
+          // crashed or closed tab and must fail rather than turn the run green.
+          res =
+            NAVIGATING_ACTIONS.includes(step.action) && (await navigationStarted(nav, pb.tabId))
+              ? { status: "passed", message: "(halaman berpindah)", ms: 0 }
+              : {
+                  status: "failed",
+                  message:
+                    "halaman tidak merespons — reload halaman, lalu Play lagi",
+                  code: "no_response",
+                  ms: 0
+                };
+        } finally {
+          nav.stop();
         }
       }
 
       if (!res || !res.status) {
-        res = { status: "failed", message: "no result from page", code: "no_result", ms: 0 };
+        res = { status: "failed", message: "tidak ada hasil dari halaman", code: "no_result", ms: 0 };
       }
       await pushResult(step, res);
 
@@ -1327,26 +1529,57 @@ async function runPlayback(gen) {
     await setPlayback(pb);
   } finally {
     ticking = false;
+    // A run was requested while this loop was still going (the next suite of
+    // a multi-suite queue, or a fresh Play right after Stop). Start it now.
+    // If it has been superseded or stopped since, its loop sees the stale
+    // generation / inactive playback and exits straight away.
+    if (pendingRun !== null) {
+      const next = pendingRun;
+      pendingRun = null;
+      runPlayback(next);
+    }
   }
 }
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const session = await getSession();
-  if (session.tabId === tabId && session.active) {
-    session.active = false;
-    session.paused = false;
-    await setSession(session);
+function notifyRecordingStopped(reason) {
+  if (!chrome.notifications || !chrome.notifications.create) return;
+  try {
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Perekaman dihentikan",
+      message: reason
+    });
+  } catch (e) {
+    /* notifications not available on this platform */
   }
-  const pb = await getPlayback();
-  if (pb.active && pb.tabId === tabId) {
-    playGen++;
-    pb.active = false;
-    pb.status = "stopped";
-    pb.finishedAt = Date.now();
-    await setPlayback(pb);
-    await settleSuiteQueueEntry(pb, false);
-  }
-});
+}
+
+// Goes through the same queue as the message handlers — it rewrites `session`
+// too, and a step still in flight from the closing tab must not overwrite it.
+chrome.tabs.onRemoved.addListener((tabId) =>
+  serialize(async () => {
+    const session = await getSession();
+    if (session.tabId === tabId && session.active) {
+      session.active = false;
+      session.paused = false;
+      await setSession(session);
+      // The popup only polls while it's open, so without this the user has no
+      // way to know recording stopped until they reopen it — a direct cause of
+      // the "kehilangan data" (data loss surprise) complaint.
+      notifyRecordingStopped("Tab yang direkam ditutup. Langkah yang sudah terekam tetap tersimpan.");
+    }
+    const pb = await getPlayback();
+    if (pb.active && pb.tabId === tabId) {
+      playGen++;
+      pb.active = false;
+      pb.status = "stopped";
+      pb.finishedAt = Date.now();
+      await setPlayback(pb);
+      await settleSuiteQueueEntry(pb, false);
+    }
+  })
+);
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== "complete") return;

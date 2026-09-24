@@ -14,9 +14,12 @@
 (function () {
   const DEFAULT_ID = "cypress";
 
-  const list = [window.GenCypress, window.GenPlaywright, window.GenWdio].filter(
-    Boolean,
-  );
+  const list = [
+    window.GenCypress,
+    window.GenPlaywright,
+    window.GenWdio,
+    window.GenSelenium,
+  ].filter(Boolean);
 
   const byId = {};
   list.forEach((g) => {

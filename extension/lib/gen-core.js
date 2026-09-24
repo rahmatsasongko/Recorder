@@ -13,6 +13,10 @@
 // window.GenCore.buildProject(suites) -> { suiteModels, pages, baseUrl, ... }
 
 (function () {
+  // Any recorded upload filename ending in one of these gets swapped for the
+  // bundled fixtures/tije-test-logo.png (see the "upload" case below).
+  const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|avif|svg)$/i;
+
   /* ------------------------------ string utils ------------------------------ */
 
   function cap(s) {
@@ -49,21 +53,31 @@
         .join("_") || "MESSAGE"
     );
   }
+  // Escapes `s` to sit between two `quote` characters in JS source. Line
+  // terminators have to be escaped too: a raw newline ends a string literal,
+  // so a multi-line <textarea> value would otherwise generate a syntax error.
+  function jsEscape(s, quote) {
+    let out = "";
+    for (const ch of String(s)) {
+      const c = ch.codePointAt(0);
+      if (ch === quote || ch === "\\") out += "\\" + ch;
+      else if (c === 10) out += "\\n";
+      else if (c === 13) out += "\\r";
+      else if (c === 9) out += "\\t";
+      // other control characters, plus U+2028 / U+2029 which end a line in JS
+      else if (c < 0x20 || c === 0x2028 || c === 0x2029) out += "\\u" + c.toString(16).padStart(4, "0");
+      else out += ch;
+    }
+    return out;
+  }
+
   function dq(v) {
-    return (
-      '"' +
-      String(v == null ? "" : v)
-        .replace(/\\/g, "\\\\")
-        .replace(/"/g, '\\"') +
-      '"'
-    );
+    return '"' + jsEscape(v == null ? "" : v, '"') + '"';
   }
   function sq(v) {
     v = String(v == null ? "" : v);
-    if (v.includes("'") && !v.includes('"')) {
-      return '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
-    }
-    return "'" + v.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+    if (v.includes("'") && !v.includes('"')) return '"' + jsEscape(v, '"') + '"';
+    return "'" + jsEscape(v, "'") + "'";
   }
   function pathOf(url) {
     try {
@@ -73,14 +87,78 @@
       return url || "/";
     }
   }
-  function pageKey(url) {
+  /* ------------------------------ page identity ------------------------------ */
+
+  // A path segment that names one record rather than a page: /users/123,
+  // /orders/3f2b8c1e-..., /files/507f1f77bcf86cd799439011, or a route
+  // placeholder someone typed in by hand (:id, {id}, [id]).
+  const UUID_SEG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function isDynamicSegment(seg) {
+    return (
+      /^\d+$/.test(seg) ||
+      UUID_SEG.test(seg) ||
+      /^[0-9a-f]{16,}$/i.test(seg) || // Mongo ObjectId, hashes
+      (/^[A-Za-z0-9]{20,}$/.test(seg) && /\d/.test(seg)) || // Firebase / cuid / ULID style ids
+      /^(:[\w-]+|\{[\w-]+\}|\[[\w-]+\])$/.test(seg)
+    );
+  }
+
+  // The route of a URL as segments. A hash-routed app (/#/users/list) keeps
+  // its whole route after the "#", so its pathname alone is always "/".
+  function pathSegments(url) {
     try {
       const u = new URL(url);
-      const seg = u.pathname.split("/").filter(Boolean);
-      return camel(seg[seg.length - 1] || seg[0] || "home") || "home";
+      let path = u.pathname;
+      if ((path === "/" || path === "") && /^#!?\//.test(u.hash)) {
+        path = u.hash.replace(/^#!?/, "").replace(/[?#].*$/, "");
+      }
+      return path.split("/").filter(Boolean);
     } catch (e) {
-      return "home";
+      return [];
     }
+  }
+
+  // What makes two URLs "the same page": the route with ids folded away, so
+  // /users/1 and /users/2 are one page while /users and /users/1 are two.
+  function pageTemplate(url) {
+    return pathSegments(url)
+      .map((s) => (isDynamicSegment(s) ? ":id" : s.toLowerCase()))
+      .join("/");
+  }
+
+  // A valid identifier stem for a page. `depth` is how many of the trailing
+  // static segments to use: 1 gives "edit", 2 gives "productEdit". A route
+  // that ends in an id is a detail page of whatever precedes it.
+  function pageKeyFor(segs, depth) {
+    const statics = segs.filter((s) => !isDynamicSegment(s));
+    const detail = segs.length > 0 && isDynamicSegment(segs[segs.length - 1]);
+    let key = camel(statics.slice(-depth).join(" "));
+    if (detail) key = key ? key + "Detail" : "detail";
+    if (!key) key = "home";
+    // A class / const name cannot start with a digit (/2024-report).
+    if (/^\d/.test(key)) key = "page" + cap(key);
+    return key;
+  }
+
+  // The shortest key for a URL that no page in `taken` already uses. Two
+  // different routes with the same last segment (/admin/edit, /product/edit)
+  // used to collapse into one Page Object; the later one now widens with its
+  // parent segment instead (edit, productEdit).
+  function uniquePageKey(segs, taken) {
+    const statics = segs.filter((s) => !isDynamicSegment(s)).length;
+    for (let depth = 1; depth <= Math.max(1, statics); depth++) {
+      const key = pageKeyFor(segs, depth);
+      if (!taken[key]) return key;
+    }
+    const base = pageKeyFor(segs, Math.max(1, statics));
+    let i = 2;
+    while (taken[base + i]) i++;
+    return base + i;
+  }
+
+  // Short key for one URL in isolation (no other pages to collide with).
+  function pageKey(url) {
+    return uniquePageKey(pathSegments(url), {});
   }
   function originOf(session) {
     for (const sc of session.scenarios || []) {
@@ -158,6 +236,27 @@
     );
   }
 
+  // A value that must not be written into generated code. The recorder marks
+  // password fields `sensitive`; type=password covers steps recorded before
+  // that, and the naming check catches a "show password" toggle that flipped
+  // the input to type=text. Narrower than isPasswordStep on purpose — that
+  // one is only used to spot a login, and its bare "pass" also matches
+  // "passport", which is ordinary test data.
+  const SECRET_NAME = /pass(word|wd|code|phrase)|pwd|sandi/i;
+  const NON_TEXT_INPUT = ["checkbox", "radio", "button", "submit", "reset", "image", "file", "hidden"];
+  function isSecretStep(st) {
+    if (!st) return false;
+    if (st.sensitive === true || st.inputType === "password") return true;
+    if (NON_TEXT_INPUT.includes(st.inputType)) return false;
+    return SECRET_NAME.test(st.elementName || "") || SECRET_NAME.test(st.selector || "");
+  }
+
+  // Where a secret is used, for the file that tells whoever runs the tests
+  // which variables to provide.
+  function secretUse(ctx) {
+    return { label: ctx.label || "" };
+  }
+
   /* ------------------------------ registry ------------------------------ */
 
   // The shared "pages" state steps are compiled against. One session -> one
@@ -167,35 +266,60 @@
   function createRegistry() {
     const pages = {};
     const pageOrder = [];
+    const pageByTemplate = {};
+    const usedEnv = new Set();
 
+    // A page is identified by its route template, not by its final URL
+    // segment — the key (and so the class / file names) is derived from it
+    // and made unique against the pages already registered.
     function ensurePage(url) {
-      const key = pageKey(url);
-      if (!pages[key]) {
-        pages[key] = {
-          key,
-          className: pascal(key) + "Page",
-          fileBase: camel(key) + "Page",
-          locatorConst: "locator" + pascal(key),
-          locatorFile: "locator-" + key,
-          messageConst: pascal(key) + "Message",
-          messageFile: key + ".message",
-          dataConst: pascal(key) + "Data",
-          dataFile: key + ".data",
-          locators: [],
-          locatorBySelector: {},
-          locatorByField: {},
-          methods: [],
-          methodByKey: {},
-          messages: {},
-          messageByText: {},
-          data: {},
-          dataByValue: {},
-          usesData: false,
-          usesMessage: false,
-        };
-        pageOrder.push(key);
-      }
-      return pages[key];
+      const tpl = pageTemplate(url);
+      if (pageByTemplate[tpl]) return pageByTemplate[tpl];
+      const key = uniquePageKey(pathSegments(url), pages);
+      const page = {
+        key,
+        template: tpl,
+        className: pascal(key) + "Page",
+        fileBase: camel(key) + "Page",
+        locatorConst: "locator" + pascal(key),
+        locatorFile: "locator-" + key,
+        messageConst: pascal(key) + "Message",
+        messageFile: key + ".message",
+        dataConst: pascal(key) + "Data",
+        dataFile: key + ".data",
+        locators: [],
+        locatorBySelector: {},
+        locatorByField: {},
+        methods: [],
+        methodByKey: {},
+        messages: {},
+        messageByText: {},
+        data: {},
+        dataByValue: {},
+        // data key -> { env, uses } for values that must never be written
+        // into the generated files (passwords).
+        secrets: {},
+        usesData: false,
+        usesMessage: false,
+      };
+      pages[key] = page;
+      pageByTemplate[tpl] = page;
+      pageOrder.push(key);
+      return page;
+    }
+
+    // Environment variable a secret is read from: LOGIN_PASSWORD. Unique
+    // across the whole project, since the variables are global.
+    function envName(page, dataKey) {
+      const base =
+        words(page.key + " " + dataKey)
+          .map((w) => w.toUpperCase())
+          .join("_") || "SECRET";
+      let env = base;
+      let i = 2;
+      while (usedEnv.has(env)) env = base + "_" + i++;
+      usedEnv.add(env);
+      return env;
     }
 
     function getLocator(page, st) {
@@ -233,18 +357,28 @@
       return entry;
     }
 
-    function getDataKey(page, base, value) {
+    // `secret` ({ label } — where it is used) marks a value that must not be
+    // written into the generated project. It still gets a data key, so call
+    // sites read the same (LoginData.password); the data file resolves the
+    // key from an environment variable instead of embedding the value.
+    function getDataKey(page, base, value, secret) {
       const stored = String(value == null ? "" : value);
       const sig = base + "=" + stored;
-      if (page.dataByValue[sig]) return page.dataByValue[sig];
-      let key = camel(base) || "value";
-      let name = key;
-      let i = 2;
-      while (Object.prototype.hasOwnProperty.call(page.data, name))
-        name = key + i++;
-      page.data[name] = stored;
-      page.dataByValue[sig] = name;
-      page.usesData = true;
+      let name = page.dataByValue[sig];
+      if (!name) {
+        const key = camel(base) || "value";
+        name = key;
+        let i = 2;
+        while (Object.prototype.hasOwnProperty.call(page.data, name))
+          name = key + i++;
+        page.data[name] = stored;
+        page.dataByValue[sig] = name;
+        page.usesData = true;
+      }
+      if (secret) {
+        const s = page.secrets[name] || (page.secrets[name] = { env: envName(page, name), uses: [] });
+        if (secret.label && !s.uses.includes(secret.label)) s.uses.push(secret.label);
+      }
       return name;
     }
 
@@ -311,8 +445,8 @@
       // follow a navigation land on the right Page Object even when the
       // recorder produced no explicit `visit` for it.
       if (step.url) {
-        const k = pageKey(step.url);
-        if (!ctx.page || ctx.page.key !== k) ctx.page = reg.ensurePage(step.url);
+        const p = reg.ensurePage(step.url);
+        if (p !== ctx.page) ctx.page = p;
       }
       if (step.action === "visit") {
         return { kind: "visit", path: pathOf(step.url) };
@@ -344,6 +478,26 @@
         return call(m);
       }
 
+      // A "contain text" assertion with no element picked (typed straight
+      // into the popup, or an assert-mode click on plain body text) checks
+      // the whole page rather than one locator — e.g. asserting "Dashboard"
+      // or "Charlie Chaplin" appears somewhere after login.
+      if (
+        step.action === "assert" &&
+        (step.assertion || {}).type === "contain" &&
+        !step.selector
+      ) {
+        const a = step.assertion;
+        const key = reg.getMessageKey(page, a.value || "");
+        const m = reg.getMethod(
+          page,
+          "verifyPageContains" +
+            (pascal(words(a.value).slice(0, 3).join(" ")) || "Text"),
+          { op: { t: "assertPageText", msgKey: key } },
+        );
+        return call(m);
+      }
+
       if (!step.selector)
         return { kind: "comment", text: `skipped ${step.action}: no selector` };
 
@@ -369,6 +523,12 @@
             params: ["value"],
             op: { t: "assertValue", field: loc.field },
           });
+          // Asserting a password field's value would otherwise write the
+          // password straight into the spec.
+          if (isSecretStep(step)) {
+            const dk = reg.getDataKey(page, loc.base, a.value || "", secretUse(ctx));
+            return call(m, [`${page.dataConst}.${dk}`]);
+          }
           return call(m, [dq(a.value || "")]);
         }
         const suffix = a.type === "exist" ? "Exists" : "Visible";
@@ -388,7 +548,12 @@
           params: [param],
           op: { t: "type", field: loc.field },
         });
-        const dk = reg.getDataKey(page, loc.base, step.value);
+        const dk = reg.getDataKey(
+          page,
+          loc.base,
+          step.value,
+          isSecretStep(step) ? secretUse(ctx) : null,
+        );
         return call(m, [`${page.dataConst}.${dk}`]);
       }
       if (step.action === "clear") {
@@ -399,7 +564,7 @@
         );
       }
       if (step.action === "upload") {
-        const names =
+        const rawNames =
           Array.isArray(step.files) && step.files.length
             ? step.files
             : step.value
@@ -408,6 +573,16 @@
                   .map((s) => s.trim())
                   .filter(Boolean)
               : ["file.pdf"];
+        // The recorder never captures the actual file bytes (privacy/size),
+        // only the filename picked at record time — so a generated project
+        // pointing at that original name has nothing to actually find in its
+        // fixtures folder and errors immediately. For images specifically we
+        // ship a real fixture (fixtures/tije-test-logo.png) with the
+        // extension, so swap any image upload over to that file — it exists,
+        // so the exported test runs out of the box instead of erroring on a
+        // missing fixture. Non-image uploads (pdf, csv, ...) keep the
+        // recorded name, since we have no generic stand-in for those.
+        const names = rawNames.map((n) => (IMAGE_EXT.test(n) ? "tije-test-logo.png" : n));
         const m = reg.getMethod(page, "upload" + pascal(loc.base), {
           op: { t: "upload", field: loc.field, files: names },
         });
@@ -515,7 +690,10 @@
     const compiled = (session.scenarios || [])
       .filter((sc) => sc && (sc.steps || []).length)
       .map((sc) => {
-        const ctx = { page: null };
+        const ctx = {
+          page: null,
+          label: (suiteName + " › " + (sc.name || "scenario")).replace(/\s+/g, " "),
+        };
         return {
           name: sc.name || "scenario",
           steps: sc.steps.filter(Boolean),
@@ -729,6 +907,107 @@
     );
   }
 
+  /* ------------------------------ secrets ------------------------------ */
+
+  // The lines of a page's data object. A secret is looked up through
+  // secret(NAME) (defined by secretHelper) instead of being written out.
+  function dataRows(page) {
+    const secrets = page.secrets || {};
+    return Object.keys(page.data).map((k) =>
+      secrets[k]
+        ? `  ${k}: secret(${dq(secrets[k].env)}),`
+        : `  ${k}: ${dq(page.data[k])},`,
+    );
+  }
+
+  // Source of the secret() lookup a data file starts with when it holds one.
+  //   "node"    process.env       Playwright, WebdriverIO, Selenium
+  //   "cypress" Cypress.env       cypress.env.json and CYPRESS_* variables
+  function secretHelper(page, kind) {
+    if (!Object.keys(page.secrets || {}).length) return "";
+    const cy = kind === "cypress";
+    return [
+      `// Secrets come from the ${cy ? "Cypress env" : "environment"} — never write real credentials here.`,
+      cy
+        ? `// Fill in cypress.env.json (git-ignored); cypress.env.example.json lists the names.`
+        : `// Copy .env.example to .env and fill it in (.env is git-ignored).`,
+      `const secret = (name) => {`,
+      `  const value = ${cy ? "Cypress.env(name)" : "process.env[name]"};`,
+      `  if (!value) {`,
+      cy
+        ? `    throw new Error("Missing Cypress env " + name + " — copy cypress.env.example.json to cypress.env.json and fill it in.");`
+        : `    throw new Error("Missing environment variable " + name + " — copy .env.example to .env and fill it in.");`,
+      `  }`,
+      `  return value;`,
+      `};`,
+      ``,
+      ``,
+    ].join("\n");
+  }
+
+  // Every secret in a project, in page order.
+  function secretsOf(pages) {
+    const out = [];
+    for (const p of pages || []) {
+      for (const k of Object.keys(p.secrets || {})) {
+        const s = p.secrets[k];
+        out.push({ env: s.env, page: p.key, field: k, uses: s.uses });
+      }
+    }
+    return out;
+  }
+
+  // .env.example — names only, never values.
+  function envExample(pages) {
+    const list = secretsOf(pages);
+    if (!list.length) return "";
+    const lines = [
+      "# Credentials the generated tests need. Copy this file to .env and fill it in.",
+      "# .env is git-ignored — never commit real credentials.",
+      "",
+    ];
+    for (const s of list) {
+      lines.push(
+        `# ${s.page} › ${s.field}${s.uses.length ? " — " + s.uses.join("; ") : ""}`,
+        `${s.env}=`,
+        "",
+      );
+    }
+    return lines.join("\n");
+  }
+
+  // cypress.env.example.json — the same list, in the shape Cypress reads.
+  function envExampleJson(pages) {
+    const list = secretsOf(pages);
+    if (!list.length) return "";
+    const obj = {};
+    for (const s of list) obj[s.env] = "";
+    return JSON.stringify(obj, null, 2) + "\n";
+  }
+
+  // README section: which variables exist and where to put them.
+  function secretsReadme(pages, howToProvide) {
+    const list = secretsOf(pages);
+    if (!list.length) return "";
+    const rows = list
+      .map(
+        (s) =>
+          `| \`${s.env}\` | ${s.page} › ${s.field}${s.uses.length ? " — " + s.uses.join("; ") : ""} |`,
+      )
+      .join("\n");
+    return `
+## Secrets
+
+Passwords are **not** stored in this project — the data files read them from the environment, so nothing sensitive gets committed.
+
+| Variable | Used for |
+| -------- | -------- |
+${rows}
+
+${howToProvide}
+`;
+  }
+
   window.GenCore = {
     cap,
     words,
@@ -739,6 +1018,7 @@
     sq,
     pathOf,
     pageKey,
+    pageTemplate,
     originOf,
     safeFileName,
     createRegistry,
@@ -747,5 +1027,12 @@
     buildProject,
     collectUses,
     originWarning,
+    isSecretStep,
+    dataRows,
+    secretHelper,
+    secretsOf,
+    envExample,
+    envExampleJson,
+    secretsReadme,
   };
 })();

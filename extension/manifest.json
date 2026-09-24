@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "QA Web Recorder",
   "version": "0.4.0",
-  "description": "Record website activity and turn it into Cypress, Playwright or WebdriverIO tests with a Page Object Model structure.",
-  "permissions": ["storage", "tabs", "scripting", "downloads", "activeTab"],
+  "description": "Record website activity and turn it into Cypress, Playwright, WebdriverIO or Selenium tests with a Page Object Model structure.",
+  "minimum_chrome_version": "111",
+  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "downloads", "activeTab", "notifications"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
@@ -23,6 +24,19 @@
       "js": ["content/content.js", "content/player.js"],
       "run_at": "document_start",
       "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/page-hook.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["fixtures/tije-test-logo.png"],
+      "matches": ["<all_urls>"]
     }
   ],
   "icons": {

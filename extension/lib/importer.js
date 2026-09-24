@@ -65,6 +65,9 @@
     }
   }
   function pageKeyOf(url) {
+    // Same identity rules as the generator, so an export imports back onto
+    // the same pages (lib/gen-core.js is loaded first).
+    if (window.GenCore && window.GenCore.pageKey) return window.GenCore.pageKey(url);
     try {
       const u = new URL(url);
       const seg = u.pathname.split("/").filter(Boolean);
@@ -502,6 +505,22 @@
     return null;
   }
 
+  // A value the project reads from the environment instead of holding itself:
+  //   secret("LOGIN_PASSWORD")   what this extension's exports write
+  //   Cypress.env("PASSWORD")    hand-written projects
+  //   process.env.PASSWORD
+  // Returns the variable's name, or null when `expr` is anything else.
+  function secretRef(expr) {
+    const s = String(expr == null ? "" : expr).trim();
+    let m = /^secret\(\s*(['"`])([\w.-]+)\1\s*\)$/.exec(s);
+    if (m) return m[2];
+    m = /^Cypress\.env\(\s*(['"`])([\w.-]+)\1\s*\)/.exec(s);
+    if (m) return m[2];
+    m = /^process\.env(?:\.([A-Za-z_$][\w$]*)|\[\s*(['"`])([\w.-]+)\2\s*\])/.exec(s);
+    if (m) return m[1] || m[3];
+    return null;
+  }
+
   function isRegexy(expr) {
     return /new\s+RegExp|^\/.*\/[a-z]*$/i.test(String(expr).trim());
   }
@@ -610,7 +629,13 @@
       if (name === "realClick" || name === "click" || name === "rightclick" || name === "dblclick") {
         actions.push({ action: "click" });
       } else if (name === "type" || name === "realType") {
-        actions.push({ action: "type", value: resolveArgVal(args, scope, ctx, 0) });
+        // A value the project reads from the environment (this extension's
+        // exports do that for passwords) must not be typed as its own source
+        // text. Keep the step, blank the value, and say so.
+        const rawArg = splitTop(args, blankOut(args), ",")[0] || "";
+        const v = resolveArgVal(args, scope, ctx, 0);
+        const ref = secretRef(typeof v === "string" ? v : rawArg) || secretRef(rawArg);
+        actions.push(ref ? { action: "type", value: "", secret: ref } : { action: "type", value: v });
       } else if (name === "clear") {
         actions.push({ action: "clear" });
       } else if (name === "check") {
@@ -685,6 +710,11 @@
       if (a.key) step.key = a.key;
       if (a.value !== undefined) step.value = a.value == null ? null : String(a.value);
       if (a.files) step.files = a.files;
+      if (a.secret) {
+        step.sensitive = true;
+        step.inputType = "password";
+        ctx.warn("nilai rahasia " + a.secret + " tidak ikut diimpor — isi manual di editor sebelum diputar");
+      }
       pushStep(ctx, step);
     }
   }

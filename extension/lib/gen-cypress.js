@@ -63,6 +63,8 @@
         return `    cy.url().should("include", ${dq(op.value)});`;
       case "assertText":
         return `    ${g}.should("be.visible").and("contain", ${page.messageConst}.${op.msgKey});`;
+      case "assertPageText":
+        return `    cy.contains(${page.messageConst}.${op.msgKey}).should("be.visible");`;
       case "assertValue":
         return `    ${g}.should("have.value", ${p});`;
       case "assertExists":
@@ -85,7 +87,7 @@
       case "click":
         return `    ${g}.click();`;
       case "upload": {
-        const fixtures = op.files.map((n) => `"cypress/fixtures/${n}"`).join(", ");
+        const fixtures = op.files.map((n) => dq("cypress/fixtures/" + n)).join(", ");
         const arg = op.files.length > 1 ? `[${fixtures}]` : fixtures;
         return (
           `    // TODO: put ${op.files.join(", ")} in cypress/fixtures/\n` +
@@ -183,10 +185,8 @@ ${rows.join("\n") || "  //"}
   }
 
   function renderData(page) {
-    const rows = Object.keys(page.data).map(
-      (k) => `  ${k}: ${dq(page.data[k])},`,
-    );
-    return `export const ${page.dataConst} = {
+    const rows = C.dataRows(page);
+    return `${C.secretHelper(page, "cypress")}export const ${page.dataConst} = {
 ${rows.join("\n") || "  //"}
 };
 `;
@@ -302,12 +302,30 @@ ${beforeBlock}${its}
     }
 
     // The session key changes with the credentials so a new user re-logs in.
-    const sessionKey =
-      dataConsts.length === 1
-        ? dataConsts[0]
-        : dataConsts.length > 1
-          ? "[" + dataConsts.join(", ") + "]"
-          : dq(model.loginName);
+    // When the data holds a password, key on the non-secret values only —
+    // Cypress prints the session id in its command log.
+    let sessionKey;
+    const dataPages = model.pages.filter((p) => usedData.has(p.dataConst));
+    if (dataPages.some((p) => Object.keys(p.secrets || {}).length)) {
+      const parts = [];
+      for (const it of model.loginBody) {
+        for (const a of it.args || []) {
+          const m = /^([A-Za-z0-9]+Data)\.(\w+)$/.exec(a);
+          const page = m && dataPages.find((p) => p.dataConst === m[1]);
+          if (!page || page.secrets[m[2]] || parts.includes(a)) continue;
+          parts.push(a);
+        }
+      }
+      sessionKey =
+        parts.length === 1 ? parts[0] : parts.length > 1 ? "[" + parts.join(", ") + "]" : dq(model.loginName);
+    } else {
+      sessionKey =
+        dataConsts.length === 1
+          ? dataConsts[0]
+          : dataConsts.length > 1
+            ? "[" + dataConsts.join(", ") + "]"
+            : dq(model.loginName);
+    }
 
     const login = [];
     if (model.loginPath) login.push(`  cy.visit(${dq(model.loginPath)});`);
@@ -526,6 +544,26 @@ module.exports = defineConfig({
     );
   }
 
+  const SECRETS_HOW =
+    "Copy `cypress.env.example.json` to `cypress.env.json` (git-ignored) and fill in the values. " +
+    "In CI, export them as `CYPRESS_<NAME>` variables instead — e.g. `CYPRESS_LOGIN_PASSWORD`.";
+
+  const GITIGNORE = `node_modules/
+cypress/screenshots/
+cypress/videos/
+cypress/downloads/
+cypress.env.json
+`;
+
+  // Files that only exist when the recording typed a password: the names of
+  // the variables to fill in (never their values) and the ignore rules that
+  // keep the real ones out of git.
+  function secretFiles(pages, files) {
+    if (!C.secretsOf(pages).length) return;
+    files["cypress.env.example.json"] = C.envExampleJson(pages);
+    files[".gitignore"] = GITIGNORE;
+  }
+
   function renderReadme(model) {
     return `# ${model.suiteName}
 
@@ -547,7 +585,7 @@ npx cypress run
 | \`cypress/messages/\` | \`export const XMessage = { ... }\` assertion text |
 | \`cypress/data/\`     | \`export const XData = { ... }\` test data |
 | \`cypress/support/\`  | \`cy.login()\`, \`cy.getByTestId()\`, hooks |
-${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `cy." + model.loginName + "()` and run in `beforeEach`.\n" : ""}
+${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `cy." + model.loginName + "()` and run in `beforeEach`.\n" : ""}${C.secretsReadme(model.pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 - **Test retries** — \`retries: { runMode: 2 }\`; a test is retried twice before it fails.
@@ -566,7 +604,7 @@ Next steps if a spec is still flaky:
 `;
   }
 
-  function renderProjectReadme(suiteModels, projectName, baseUrl) {
+  function renderProjectReadme(suiteModels, projectName, baseUrl, pages) {
     const warn = originWarning(suiteModels, baseUrl, "cypress.config.js");
     const rows = suiteModels
       .map((m) => {
@@ -602,7 +640,7 @@ ${rows}
 | \`cypress/messages/\` | \`export const XMessage = { ... }\` assertion text |
 | \`cypress/data/\`     | \`export const XData = { ... }\` test data |
 | \`cypress/support/\`  | one login command per suite that needs one, \`cy.getByTestId()\`, hooks |
-
+${C.secretsReadme(pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 - **Test retries** — \`retries: { runMode: 2 }\`; a test is retried twice before it fails.
@@ -645,6 +683,7 @@ ${rows}
     files["cypress.config.js"] = renderConfig(model);
     files["package.json"] = renderPackageJson(model);
     files["README.md"] = renderReadme(model);
+    secretFiles(model.pages, files);
 
     return { model, files };
   }
@@ -666,7 +705,8 @@ ${rows}
     files["cypress/support/e2e.js"] = renderSupportE2E();
     files["cypress.config.js"] = renderConfig({ baseUrl });
     files["package.json"] = renderPackageJson({ suiteName: projectName });
-    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl);
+    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl, pages);
+    secretFiles(pages, files);
 
     return { suiteModels, baseUrl, projectName, files };
   }

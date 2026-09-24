@@ -93,17 +93,36 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  // A real click always fires a PointerEvent before its MouseEvent
+  // (pointerdown before mousedown, pointerup before mouseup). Radix UI /
+  // shadcn-style components (Popover, Dialog, Select triggers — exactly what
+  // a `data-testid="button-..."` with aria-haspopup="dialog" usually is)
+  // often bind their open/close logic to onPointerDown, not onClick, so a
+  // synthetic click that skips the pointer event never opens them even
+  // though the element itself was found and is visible.
   function fireMouse(el, type) {
     const r = el.getBoundingClientRect();
-    el.dispatchEvent(
-      new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: r.left + r.width / 2,
-        clientY: r.top + r.height / 2
-      })
-    );
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const isDown = type === "mousedown";
+    const pointerType = isDown ? "pointerdown" : "pointerup";
+    const shared = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: isDown ? 1 : 0
+    };
+    try {
+      el.dispatchEvent(
+        new PointerEvent(pointerType, { ...shared, pointerId: 1, pointerType: "mouse", isPrimary: true })
+      );
+    } catch (e) {
+      /* PointerEvent unsupported — MouseEvent below still covers older engines */
+    }
+    el.dispatchEvent(new MouseEvent(type, shared));
   }
 
   // Drag a resize grip by (dx, dy). Resizable widgets listen for mousemove /
@@ -187,6 +206,45 @@
   const bad = (message, el, code) => ({ status: "failed", message, el: el || null, code });
   const skip = (message, el, code) => ({ status: "skipped", message, el: el || null, code });
 
+  // Keep in sync with lib/gen-core.js's IMAGE_EXT — same rule for "does this
+  // upload get the bundled fixture", just evaluated in the live tab instead
+  // of at code-generation time.
+  const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|avif|svg)$/i;
+
+  let fixtureBytesCache = null;
+  async function getFixtureBytes() {
+    if (fixtureBytesCache) return fixtureBytesCache;
+    const res = await fetch(chrome.runtime.getURL("fixtures/tije-test-logo.png"));
+    fixtureBytesCache = await res.blob();
+    return fixtureBytesCache;
+  }
+
+  async function doImageUpload(step) {
+    let el = await waitForEl(step.selector, {
+      visible: false, // a styled dropzone often hides the real <input type=file>
+      type: step.selectorType,
+      tag: step.tagName
+    });
+    if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
+    if (!(el.tagName === "INPUT" && el.type === "file")) {
+      const inner = el.querySelector && el.querySelector('input[type="file"]');
+      if (!inner) return bad("elemen bukan <input type=file>", el, "bad_selector");
+      el = inner;
+    }
+    try {
+      const blob = await getFixtureBytes();
+      const file = new File([blob], "tije-test-logo.png", { type: "image/png" });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.files = dt.files;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return ok(el, "uploaded tije-test-logo.png");
+    } catch (e) {
+      return bad("gagal memuat fixture: " + String((e && e.message) || e), el, "upload_skip");
+    }
+  }
+
   async function runAction(step) {
     const a = step.action;
 
@@ -198,10 +256,15 @@
 
     if (a === "assert") return runAssert(step);
 
-    // A real file upload needs the OS file picker + the file on disk — neither is
-    // possible from a page script. Skip it here; the generated Cypress uses
-    // cy.selectFile() with a fixture.
+    // Opening the OS file picker itself can't be scripted, but setting
+    // <input type="file">.files via a synthetic DataTransfer IS allowed by
+    // browsers — that's the same technique cy.selectFile()/Playwright's
+    // setInputFiles use under the hood. We don't have the ORIGINAL file's
+    // bytes (never recorded — see gen-core.js), so this only works for
+    // images, using the bundled fixtures/tije-test-logo.png as a stand-in;
+    // anything else still has to run via the exported project.
     if (a === "upload") {
+      if (IMAGE_EXT.test(step.value || "")) return doImageUpload(step);
       return skip(
         `upload "${truncate(step.value)}" dilewati — jalankan lewat Cypress (cy.selectFile + fixture)`,
         resolveEl(step.selector, step.selectorType, step.tagName),
@@ -304,7 +367,7 @@
           setNativeValue(el, step.value == null ? "" : String(step.value));
           fireInput(el);
         }
-        return ok(el, `typed "${truncate(step.value)}"`);
+        return ok(el, `typed "${shown(step, step.value)}"`);
       }
 
       case "clear": {
@@ -416,8 +479,8 @@
       if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
       const actual = el.value == null ? "" : String(el.value);
       return actual === val
-        ? ok(el, `value is "${truncate(val)}"`)
-        : bad(`value is "${truncate(actual)}", expected "${truncate(val)}"`, el, "value_mismatch");
+        ? ok(el, `value is "${shown(step, val)}"`)
+        : bad(`value is "${shown(step, actual)}", expected "${shown(step, val)}"`, el, "value_mismatch");
     }
 
     // visible | exist
@@ -429,6 +492,12 @@
     if (!el) return bad(`element not found: ${step.selector}`, null, "element_not_found");
     if (type === "visible" && !isVisible(el)) return bad("element is not visible", el, "not_visible");
     return ok(el, type === "visible" ? "is visible" : "exists");
+  }
+
+  // A password must not land in the play log — it is stored with the run and
+  // shown in the popup. Same rule the recorder uses to flag the step.
+  function shown(step, v) {
+    return step.sensitive === true || step.inputType === "password" ? "••••••" : truncate(v);
   }
 
   function truncate(s, n = 40) {

@@ -45,6 +45,12 @@
             `await expect(${el}).toHaveText(expect.stringContaining(${page.messageConst}.${op.msgKey}));`,
           ),
         ];
+      case "assertPageText":
+        return [
+          line(
+            `await expect($("body")).toHaveText(expect.stringContaining(${page.messageConst}.${op.msgKey}));`,
+          ),
+        ];
       case "assertValue":
         return [line(`await expect(${el}).toHaveValue(${p});`)];
       case "assertExists":
@@ -174,17 +180,17 @@ ${rows.join("\n") || "  //"}
   }
 
   function renderData(page) {
-    const rows = Object.keys(page.data).map(
-      (k) => `  ${k}: ${dq(page.data[k])},`,
-    );
-    return `exports.${page.dataConst} = {
+    const rows = C.dataRows(page);
+    return `${C.secretHelper(page, "node")}exports.${page.dataConst} = {
 ${rows.join("\n") || "  //"}
 };
 `;
   }
 
   function renderPage(page) {
-    const usesMessage = page.methods.some((m) => m.op.t === "assertText");
+    const usesMessage = page.methods.some((m) =>
+      ["assertText", "assertPageText"].includes(m.op.t),
+    );
 
     const imports = [];
     if (page.locators.length)
@@ -357,8 +363,8 @@ module.exports = { ${names.join(", ")} };
 
   /* ------------------------------ project files ------------------------------ */
 
-  function renderConfig(model) {
-    return `// How long each test took. Collected and printed inside the worker —
+  function renderConfig(model, useEnv) {
+    return `${useEnv ? '// Loads .env, where the credentials the tests need live (see .env.example).\nrequire("dotenv").config();\n\n' : ""}// How long each test took. Collected and printed inside the worker —
 // onComplete() runs in the launcher process and would not see these.
 const timings = [];
 const secs = (ms) => (ms / 1000).toFixed(2) + "s";
@@ -415,7 +421,7 @@ exports.config = {
 `;
   }
 
-  function renderPackageJson(model) {
+  function renderPackageJson(model, useEnv) {
     return (
       JSON.stringify(
         {
@@ -431,12 +437,31 @@ exports.config = {
             "@wdio/local-runner": "^9.0.0",
             "@wdio/mocha-framework": "^9.0.0",
             "@wdio/spec-reporter": "^9.0.0",
+            ...(useEnv ? { dotenv: "^16.4.5" } : {}),
           },
         },
         null,
         2,
       ) + "\n"
     );
+  }
+
+  const SECRETS_HOW =
+    "Copy `.env.example` to `.env` (git-ignored) and fill in the values. " +
+    "In CI, set them as (secret) environment variables instead — `wdio.conf.js` loads `.env` through `dotenv` and leaves anything already set alone.";
+
+  const GITIGNORE = `node_modules/
+logs/
+.env
+`;
+
+  // Files that only exist when the recording typed a password: the names of
+  // the variables to fill in (never their values) and the ignore rules that
+  // keep the real ones out of git.
+  function secretFiles(pages, files) {
+    if (!C.secretsOf(pages).length) return;
+    files[".env.example"] = C.envExample(pages);
+    files[".gitignore"] = GITIGNORE;
   }
 
   const LAYOUT = `| Folder | Contents |
@@ -467,7 +492,7 @@ npx wdio run wdio.conf.js
 ## Layout
 
 ${LAYOUT}
-${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `" + model.loginName + "()` in `test/support/auth.js` and run in `beforeEach`.\n" : ""}
+${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `" + model.loginName + "()` in `test/support/auth.js` and run in `beforeEach`.\n" : ""}${C.secretsReadme(model.pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 ${ANTIFLAKE}
@@ -480,7 +505,7 @@ Next steps:
 `;
   }
 
-  function renderProjectReadme(suiteModels, projectName, baseUrl) {
+  function renderProjectReadme(suiteModels, projectName, baseUrl, pages) {
     const warn = originWarning(suiteModels, baseUrl, "wdio.conf.js");
     const rows = suiteModels
       .map((m) => {
@@ -510,7 +535,7 @@ ${rows}
 ${LAYOUT}
 
 Page Objects are shared automatically when two suites touch the same page.
-
+${C.secretsReadme(pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 ${ANTIFLAKE}
@@ -542,9 +567,11 @@ ${ANTIFLAKE}
     files[`test/specs/${s}/${s}.spec.js`] = renderSpec(model);
     const auth = renderAuth([model]);
     if (auth) files["test/support/auth.js"] = auth;
-    files["wdio.conf.js"] = renderConfig(model);
-    files["package.json"] = renderPackageJson(model);
+    const useEnv = C.secretsOf(model.pages).length > 0;
+    files["wdio.conf.js"] = renderConfig(model, useEnv);
+    files["package.json"] = renderPackageJson(model, useEnv);
     files["README.md"] = renderReadme(model);
+    secretFiles(model.pages, files);
 
     return { model, files };
   }
@@ -564,9 +591,11 @@ ${ANTIFLAKE}
 
     const auth = renderAuth(suiteModels);
     if (auth) files["test/support/auth.js"] = auth;
-    files["wdio.conf.js"] = renderConfig({ baseUrl });
-    files["package.json"] = renderPackageJson({ suiteName: projectName });
-    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl);
+    const useEnv = C.secretsOf(pages).length > 0;
+    files["wdio.conf.js"] = renderConfig({ baseUrl }, useEnv);
+    files["package.json"] = renderPackageJson({ suiteName: projectName }, useEnv);
+    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl, pages);
+    secretFiles(pages, files);
 
     return { suiteModels, baseUrl, projectName, files };
   }

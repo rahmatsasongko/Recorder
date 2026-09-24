@@ -3,6 +3,47 @@
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
+/* ------------------------------ icon system (Lucide) ------------------------------ */
+// Every icon in the UI used to be an emoji, which renders inconsistently
+// across OS emoji fonts. These are inline Lucide icons instead — no CDN/font
+// dependency (safe under the extension's default CSP), colored via
+// `currentColor` so they follow the button's text color automatically.
+
+const ICON_PATHS = {
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  "circle-help": '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  square: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
+  save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+  "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  "arrow-right": '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  "trash-2": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  circle: '<circle cx="12" cy="12" r="10"/>',
+  film: '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" x2="7" y1="2" y2="22"/><line x1="17" x2="17" y1="2" y2="22"/><line x1="2" x2="22" y1="12" y2="12"/><line x1="2" x2="7" y1="7" y2="7"/><line x1="2" x2="7" y1="17" y2="17"/><line x1="17" x2="22" y1="17" y2="17"/><line x1="17" x2="22" y1="7" y2="7"/>',
+  "mouse-pointer-click": '<path d="M14 4.1 12 6"/><path d="m5.1 8-2.9-.8"/><path d="m6 12-1.9 2"/><path d="M7.2 2.2 8 5.1"/><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>'
+};
+
+function svgIcon(name, size = 14) {
+  const inner = ICON_PATHS[name];
+  if (!inner) return "";
+  return (
+    `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`
+  );
+}
+
 const ACTIONS = [
   "visit", "click", "type", "clear", "select",
   "check", "uncheck", "keydown", "submit", "scroll", "upload",
@@ -24,7 +65,7 @@ let generatedSuitesRaw = null; // [{ id, suiteName, ... }] backing the last "pro
 let activeCodeTab = "spec";
 let activeFile = null;
 let pendingImport = null; // { files } while the spec picker is shown
-let framework = window.Generators.DEFAULT_ID; // cypress | playwright | webdriverio
+let framework = window.Generators.DEFAULT_ID; // cypress | playwright | webdriverio | selenium
 
 // The renderer for the framework currently selected in the sidebar. Recording
 // and playback never look at this — only code generation does.
@@ -38,7 +79,14 @@ function send(type, extra = {}) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ type, ...extra }, (res) => {
       void chrome.runtime.lastError;
-      resolve(res || {});
+      const r = res || {};
+      // background.js surfaces a full/broken chrome.storage.local as
+      // reason:"storage_error" instead of silently dropping the write —
+      // show it everywhere a call site just fires-and-forgets the result.
+      if (r.ok === false && r.reason === "storage_error") {
+        setFoot("Gagal menyimpan — penyimpanan penuh atau bermasalah: " + (r.message || ""));
+      }
+      resolve(r);
     });
   });
 }
@@ -76,6 +124,7 @@ function updateStepper(active) {
 function showView(id) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === id));
   updateStepper(id in STEP_OF_VIEW ? STEP_OF_VIEW[id] : 0);
+  updateCrumb(id);
   if (id === "view-recording") startPolling();
   else stopPolling();
   if (id !== "view-play") stopPlayPoll();
@@ -84,7 +133,64 @@ function setFoot(m) {
   $("#foot-status").textContent = m;
 }
 
+// The topbar switcher used to be a plain "Semua suite" button in the
+// sidebar; it now doubles as a breadcrumb showing which suite is open,
+// which is why every view change refreshes it here instead of leaving it
+// static.
+async function updateCrumb(viewId) {
+  const label = $("#crumb-suite");
+  if (!label) return;
+  if (viewId === "view-suites") {
+    label.textContent = "Semua suite";
+    return;
+  }
+  const session = await getSession();
+  label.textContent = (session && session.suiteName) || "Suite baru";
+}
+
+// Runs an async/sync action while a button shows a busy label and is
+// disabled — Generate/Export can take a moment on a large merged project,
+// and the only feedback before this was the footer text changing once it
+// was already done.
+async function withBusy(btn, busyLabel, fn) {
+  if (!btn) return fn();
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = busyLabel;
+  // Let the busy label actually paint before any synchronous, potentially
+  // slow work (code generation) blocks the main thread.
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
 /* ------------------------------ setup ------------------------------ */
+
+// Non-blocking: warns if another saved suite already has this name, but
+// never stops the user from starting anyway (two suites can legitimately
+// share a name, e.g. re-testing the same flow later) — see Product review
+// item "duplicate suite/scenario names".
+async function checkSuiteNameDuplicate() {
+  const box = $("#suiteName-warning");
+  const name = $("#suiteName").value.trim();
+  if (!box) return;
+  if (!name) {
+    box.hidden = true;
+    return;
+  }
+  const res = await send("LIST_SUITES");
+  const suites = (res && res.suites) || [];
+  const dupe = suites.some((s) => (s.suiteName || "").trim().toLowerCase() === name.toLowerCase());
+  box.innerHTML = dupe
+    ? `${svgIcon("triangle-alert")} Sudah ada suite bernama "${escapeHtml(name)}" — kamu tetap bisa lanjut, tapi pertimbangkan nama yang lebih spesifik.`
+    : "";
+  box.hidden = !dupe;
+}
+$("#suiteName").addEventListener("blur", checkSuiteNameDuplicate);
 
 $("#btn-start").addEventListener("click", async () => {
   const projectName = $("#projectName").value.trim() || "MyProject";
@@ -103,7 +209,7 @@ $("#btn-start").addEventListener("click", async () => {
   }
 
   await send("START", { projectName, suiteName, targetUrl: url.href, scenarioName: "Scenario 1" });
-  setFoot("Recording Scenario 1");
+  setFoot("Merekam Scenario 1");
   showView("view-recording");
 });
 
@@ -143,8 +249,10 @@ async function refreshRecording() {
     "Scenario " + (session.recordingIndex + 1) + " — " + sc.name;
   const paused = session.paused;
   $("#rec-dot").classList.toggle("paused", paused);
-  $("#rec-label").textContent = paused ? "Paused" : "Recording";
-  $("#btn-pause").textContent = paused ? "▶ Resume" : "⏸ Pause";
+  $("#rec-label").textContent = paused ? "Dijeda" : "Merekam";
+  $("#btn-pause").innerHTML = paused ? svgIcon("play") + " Lanjut" : svgIcon("pause") + " Jeda";
+  const iframeBanner = $("#iframe-banner");
+  if (iframeBanner) iframeBanner.hidden = !session.hasIframes;
 }
 
 $("#btn-pause").addEventListener("click", async () => {
@@ -164,11 +272,11 @@ function fmtWhen(ts) {
   if (!ts) return "";
   const diff = Date.now() - ts;
   const min = Math.round(diff / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return min + "m ago";
+  if (min < 1) return "baru saja";
+  if (min < 60) return min + "m lalu";
   const hr = Math.round(min / 60);
-  if (hr < 24) return hr + "h ago";
-  return Math.round(hr / 24) + "d ago";
+  if (hr < 24) return hr + "j lalu";
+  return Math.round(hr / 24) + "h lalu";
 }
 
 async function enterSuitesList() {
@@ -183,11 +291,12 @@ function renderSuitesList(suites, activeId) {
   list.innerHTML = suites
     .map((s, i) => {
       const isActive = s.id === activeId;
+      const name = s.suiteName || "Suite tanpa nama";
       return `
       <div class="scn${isActive ? " current" : ""}" data-id="${escapeAttr(s.id)}">
         <span class="num">${i + 1}</span>
         <span class="meta" data-op="open">
-          <div class="nm">${escapeHtml(s.suiteName || "Untitled suite")}</div>
+          <div class="nm">${escapeHtml(name)}</div>
           <div class="sub">
             <span>${escapeHtml(s.projectName || "")}</span>
             <span>${s.scenarioCount} scenario${s.scenarioCount === 1 ? "" : "s"}</span>
@@ -195,9 +304,9 @@ function renderSuitesList(suites, activeId) {
           </div>
         </span>
         <span class="tools">
-          <button class="icon-btn gen" data-op="gen" title="Generate Cypress code">⚙</button>
-          <button class="icon-btn play" data-op="open" title="Open this suite">→</button>
-          <button class="icon-btn del" data-op="del" title="Delete suite">🗑</button>
+          <button class="icon-btn gen" data-op="gen" title="Generate kode" aria-label="Generate kode untuk suite ${escapeAttr(name)}">${svgIcon("code")}</button>
+          <button class="icon-btn play" data-op="open" title="Buka suite ini" aria-label="Buka suite ${escapeAttr(name)}">${svgIcon("arrow-right")}</button>
+          <button class="icon-btn del" data-op="del" title="Hapus suite" aria-label="Hapus suite ${escapeAttr(name)}">${svgIcon("trash-2")}</button>
         </span>
       </div>`;
     })
@@ -210,15 +319,17 @@ $("#suites-list").addEventListener("click", async (e) => {
   const id = row.dataset.id;
   const op = e.target.closest("[data-op]")?.dataset.op;
   if (op === "del") {
+    const nm = row.querySelector(".nm")?.textContent || "suite ini";
+    if (!confirm(`Hapus "${nm}"? Tindakan ini tidak bisa dibatalkan.`)) return;
     await send("DELETE_SUITE", { id });
     enterSuitesList();
     return;
   }
   if (op === "gen") {
-    setFoot("Preparing Cypress code…");
+    setFoot("Menyiapkan kode " + gen().label + "…");
     const res = await send("SWITCH_SUITE", { id });
     if (!res.ok) {
-      setFoot("Could not open that suite");
+      setFoot("Tidak bisa membuka suite itu");
       return;
     }
     const session = await getSession();
@@ -229,27 +340,32 @@ $("#suites-list").addEventListener("click", async (e) => {
       return;
     }
     if (!session || !(session.scenarios || []).some((s) => (s.steps || []).length)) {
-      setFoot("This suite has no recorded steps yet");
+      setFoot("Suite ini belum punya step yang direkam");
       enterSuite();
       return;
     }
-    generated = gen().generateFiles(session);
+    try {
+      generated = gen().generateFiles(session);
+    } catch (e) {
+      setFoot("Gagal generate kode: " + (e && e.message ? e.message : e));
+      return;
+    }
     generatedSuitesRaw = null;
     activeFile = null;
-    setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
+    setFoot("Berhasil generate " + Object.keys(generated.files).length + " file " + gen().label);
     setCodeSource("suite");
     activeCodeTab = "spec";
     syncTabs();
     showView("view-code");
     return;
   }
-  setFoot("Opening suite…");
+  setFoot("Membuka suite…");
   const res = await send("SWITCH_SUITE", { id });
   if (!res.ok) {
-    setFoot("Could not open that suite");
+    setFoot("Tidak bisa membuka suite itu");
     return;
   }
-  setFoot("Suite opened");
+  setFoot("Suite dibuka");
   const session = await getSession();
   if (session && session.active) showView("view-recording");
   else enterSuite();
@@ -267,7 +383,7 @@ async function exportAllSuites() {
   const res = await send("EXPORT_ALL_SUITES");
   const suites = (res && res.suites) || [];
   if (!res.ok || !suites.length) {
-    setFoot("No suites to export");
+    setFoot("Tidak ada suite untuk diekspor");
     return;
   }
   const bundle = {
@@ -290,9 +406,14 @@ async function exportAllSuites() {
       a.click();
       a.remove();
     }
-    setFoot("Exported " + suites.length + " suite(s)");
+    // A backup has to restore everything, so it keeps passwords — say so.
+    const kept = suites.reduce((n, s) => n + countSecrets(s.scenarios, true), 0);
+    setFoot(
+      "Berhasil ekspor " + suites.length + " suite" +
+        (kept ? " — berisi " + kept + " password dalam teks biasa, jangan dibagikan" : "")
+    );
   } catch (e) {
-    setFoot("Export failed: " + e.message);
+    setFoot("Ekspor gagal: " + e.message);
   }
 }
 
@@ -303,14 +424,16 @@ async function handleImportAllFile(file) {
     if (!list) throw new Error("bukan file bundle suite yang valid");
     const res = await send("IMPORT_ALL_SUITES", { suites: list });
     if (!res.ok) throw new Error(res.reason || "import gagal");
-    setFoot("Imported " + res.added + " suite(s)");
+    setFoot("Berhasil impor " + res.added + " suite");
     enterSuitesList();
   } catch (e) {
     setFoot("Import gagal: " + (e && e.message ? e.message : e));
   }
 }
 
-$("#btn-export-suites").addEventListener("click", exportAllSuites);
+$("#btn-export-suites").addEventListener("click", () =>
+  withBusy($("#btn-export-suites"), svgIcon("download") + " Exporting…", exportAllSuites)
+);
 $("#btn-import-suites").addEventListener("click", () => $("#import-suites-file").click());
 $("#import-suites-file").addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
@@ -339,24 +462,25 @@ async function enterSuite() {
 
     const lp = sc.id && lastPlay[sc.id];
     let chip;
-    if (lp && lp.status === "passed") chip = `<span class="chip passed">✓ passed</span>`;
+    if (lp && lp.status === "passed") chip = `<span class="chip passed">${svgIcon("check", 10)} passed</span>`;
     else if (lp && lp.status === "failed")
-      chip = `<span class="chip failed">✗ ${lp.failed} failed</span>`;
+      chip = `<span class="chip failed">${svgIcon("x", 10)} ${lp.failed} failed</span>`;
     else if (!sc.saved) chip = `<span class="chip unsaved">unsaved</span>`;
     else chip = `<span class="chip recorded">recorded</span>`;
 
+    const scName = sc.name || "Scenario " + (i + 1);
     row.innerHTML = `
-      <button class="icon-btn play" data-op="play" title="Play this scenario in the browser">▶</button>
+      <button class="icon-btn play" data-op="play" title="Jalankan scenario ini di browser" aria-label="Jalankan scenario ${escapeAttr(scName)}">${svgIcon("play")}</button>
       <span class="meta" data-op="edit">
-        <div class="nm">${escapeHtml(sc.name || "Scenario " + (i + 1))}</div>
+        <div class="nm">${escapeHtml(scName)}</div>
         <div class="sub">
           <span>${sc.steps.length} step${sc.steps.length === 1 ? "" : "s"}</span>
           ${chip}
         </div>
       </span>
       <span class="tools">
-        <button class="icon-btn" data-op="edit" title="Edit steps">✎</button>
-        <button class="icon-btn del" data-op="del" title="Delete scenario">🗑</button>
+        <button class="icon-btn" data-op="edit" title="Edit steps" aria-label="Edit scenario ${escapeAttr(scName)}">${svgIcon("pencil")}</button>
+        <button class="icon-btn del" data-op="del" title="Hapus scenario" aria-label="Hapus scenario ${escapeAttr(scName)}">${svgIcon("trash-2")}</button>
       </span>`;
     list.appendChild(row);
   });
@@ -369,6 +493,8 @@ $("#scenario-list").addEventListener("click", async (e) => {
   const i = Number(row.dataset.i);
   const op = e.target.closest("[data-op]")?.dataset.op;
   if (op === "del") {
+    const nm = row.querySelector(".nm")?.textContent || "scenario ini";
+    if (!confirm(`Hapus "${nm}"? Tindakan ini tidak bisa dibatalkan.`)) return;
     await send("DELETE_SCENARIO", { index: i });
     enterSuite();
   } else if (op === "play") {
@@ -382,14 +508,34 @@ $("#scenario-list").addEventListener("click", async (e) => {
 $("#btn-add-scenario").addEventListener("click", async () => {
   const res = await send("ADD_SCENARIO");
   if (!res.ok) {
-    setFoot("Could not add scenario");
+    setFoot("Tidak bisa menambah scenario");
     return;
   }
-  setFoot("Recording Scenario " + (res.index + 1));
+  setFoot("Merekam Scenario " + (res.index + 1));
   showView("view-recording");
 });
 
 /* ------------------------------ scenario editor ------------------------------ */
+
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|avif|svg)$/i;
+
+// Steps recorded before the upload→fixture normalization (background.js's
+// ADD_STEP) still hold their original picked filename, which has no real
+// file behind it. Migrate them in place the first time their scenario is
+// opened, so the Value field, live playback and generated code all agree
+// instead of only the newest recordings being normalized.
+async function normalizeUploadSteps(index, steps) {
+  let changed = false;
+  const next = steps.map((s) => {
+    if (s.action === "upload" && IMAGE_EXT.test(s.value || "") && s.value !== "tije-test-logo.png") {
+      changed = true;
+      return { ...s, value: "tije-test-logo.png", files: ["tije-test-logo.png"] };
+    }
+    return s;
+  });
+  if (changed) await send("UPDATE_SCENARIO", { index, steps: next });
+  return changed ? next : steps;
+}
 
 async function openScenario(index) {
   const session = await getSession();
@@ -397,9 +543,49 @@ async function openScenario(index) {
   editingIndex = index;
   const sc = session.scenarios[index];
   $("#scenarioName").value = sc.name || "";
-  renderSteps(sc.steps);
+  const warn = $("#scenarioName-warning");
+  if (warn) warn.hidden = true;
+  const steps = await normalizeUploadSteps(index, sc.steps);
+  renderSteps(steps);
+  renderSelectorWarningBanner(steps);
   showView("view-scenario");
 }
+
+// Surfaces the same per-step ⚠ (selectorStable === false) as one summary at
+// the top of the editor — otherwise it's easy to save/play a scenario
+// without ever noticing a small icon buried in a collapsed step row, which
+// is exactly the flakiness users have reported.
+function renderSelectorWarningBanner(steps) {
+  const box = $("#selector-warning-banner");
+  if (!box) return;
+  const unstable = (steps || []).filter((s) => s.selector && s.selectorStable === false).length;
+  if (!unstable) {
+    box.hidden = true;
+    return;
+  }
+  box.innerHTML = `${svgIcon("triangle-alert")} ${unstable} dari ${steps.length} step memakai selector yang mungkin tidak stabil — review sebelum disimpan.`;
+  box.hidden = false;
+}
+
+// Non-blocking duplicate-name warning, mirroring checkSuiteNameDuplicate.
+async function checkScenarioNameDuplicate() {
+  const box = $("#scenarioName-warning");
+  const name = $("#scenarioName").value.trim();
+  if (!box) return;
+  if (!name) {
+    box.hidden = true;
+    return;
+  }
+  const session = await getSession();
+  const dupe = (session?.scenarios || []).some(
+    (sc, i) => i !== editingIndex && (sc.name || "").trim().toLowerCase() === name.toLowerCase()
+  );
+  box.innerHTML = dupe
+    ? `${svgIcon("triangle-alert")} Sudah ada scenario bernama "${escapeHtml(name)}" di suite ini.`
+    : "";
+  box.hidden = !dupe;
+}
+$("#scenarioName").addEventListener("blur", checkScenarioNameDuplicate);
 
 function optionList(list, selected, labelFn) {
   return list
@@ -415,6 +601,44 @@ function escapeHtml(s) {
 }
 function escapeAttr(s) {
   return String(s).replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+// Lightweight JS/TS syntax highlighter that mirrors the One Dark Pro theme
+// (keywords purple, class/type names gold, function calls blue, variables &
+// properties salmon, strings green, numbers/constants orange) — no external
+// library, just tokenize + wrap in spans.
+const JS_KEYWORDS =
+  "const|let|var|function|class|extends|static|get|set|import|export|from|default|async|await|new|return|try|catch|finally|throw|if|else|for|while|switch|case|break|continue|typeof|instanceof|of|in|do|void|delete|yield";
+const JS_CONSTANTS = "null|undefined|true|false|this|super";
+const JS_TOKEN_RE = new RegExp(
+  [
+    "(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*)", // 1: comment
+    "(`(?:\\\\[\\s\\S]|[^`\\\\])*`|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*')", // 2: string
+    "\\b(" + JS_CONSTANTS + ")\\b", // 3: constant
+    "(\\b\\d+\\.?\\d*\\b)", // 4: number
+    "\\b(" + JS_KEYWORDS + ")\\b", // 5: keyword
+    "\\b([A-Z][\\w$]*)\\b", // 6: capitalized identifier — class/type
+    "\\b([a-z_$][\\w$]*)(?=\\()", // 7: function call
+    "\\b([a-z_$][\\w$]*)\\b", // 8: plain variable / property
+  ].join("|"),
+  "g"
+);
+function highlightJS(code) {
+  const escaped = escapeHtml(code);
+  return escaped.replace(
+    JS_TOKEN_RE,
+    (m, comment, string, constant, number, keyword, className, fnCall, variable) => {
+      if (comment) return `<span class="hl-comment">${comment}</span>`;
+      if (string) return `<span class="hl-string">${string}</span>`;
+      if (constant) return `<span class="hl-number">${constant}</span>`;
+      if (number) return `<span class="hl-number">${number}</span>`;
+      if (keyword) return `<span class="hl-keyword">${keyword}</span>`;
+      if (className) return `<span class="hl-class">${className}</span>`;
+      if (fnCall) return `<span class="hl-func">${fnCall}</span>`;
+      if (variable) return `<span class="hl-var">${variable}</span>`;
+      return m;
+    }
+  );
 }
 
 // The Indonesian explanation + solution background.js attaches to a failed
@@ -438,10 +662,58 @@ function badgeClass(action) {
   if (action === "assert") return "assert";
   return "input";
 }
+// A password: masked in the editor and the step list. It is still stored, in
+// plain text, because playing the scenario in the browser has to type it —
+// but generated projects read it from the environment instead (lib/gen-core.js).
+function isSensitiveStep(step) {
+  return !!step && (step.sensitive === true || step.inputType === "password");
+}
+const MASK = "••••••••";
+
+// A step that carries a password. The same rule the generator uses
+// (lib/gen-core.js), so what generated code reads from the environment and
+// what an exported session drops always agree.
+function isSecretValueStep(step) {
+  const secret = window.GenCore ? window.GenCore.isSecretStep(step) : isSensitiveStep(step);
+  if (!secret) return false;
+  if (step.action === "type") return true;
+  return step.action === "assert" && !!step.assertion && step.assertion.type === "value";
+}
+function secretValueOf(step) {
+  return step.action === "assert" ? (step.assertion && step.assertion.value) || "" : step.value || "";
+}
+// How many passwords are stored in these scenarios / how many secret fields sit empty.
+function countSecrets(scenarios, filled) {
+  let n = 0;
+  for (const sc of scenarios || []) {
+    for (const st of sc.steps || []) {
+      if (isSecretValueStep(st) && !!secretValueOf(st) === filled) n++;
+    }
+  }
+  return n;
+}
+// A copy of `session` with every password blanked and its step kept (flagged
+// sensitive), for anything that ends up in a project — a repo, a colleague —
+// rather than in a personal backup.
+function withoutSecrets(session) {
+  const scenarios = (session.scenarios || []).map((sc) => ({
+    ...sc,
+    steps: (sc.steps || []).map((st) => {
+      if (!isSecretValueStep(st)) return st;
+      const next = { ...st, sensitive: true };
+      if (st.action === "assert") next.assertion = { ...st.assertion, value: "" };
+      else next.value = "";
+      return next;
+    })
+  }));
+  return { session: { ...session, scenarios }, blanked: countSecrets(session.scenarios, true) };
+}
+
 function previewOf(step) {
   if (step.action === "assert") {
     const a = step.assertion || {};
-    return (a.type || "") + (a.value ? ` "${a.value}"` : "");
+    const v = isSensitiveStep(step) ? MASK : a.value;
+    return (a.type || "") + (v ? ` "${v}"` : "");
   }
   if (step.action === "visit" || step.action === "scroll")
     return step.url || step.value || "";
@@ -452,7 +724,7 @@ function previewOf(step) {
     const drag = `${Number(step.dx) || 0}, ${Number(step.dy) || 0} px`;
     return step.action === "resize" && step.value ? `${drag} → ${step.value}` : drag;
   }
-  if (step.value != null && step.value !== "") return String(step.value);
+  if (step.value != null && step.value !== "") return isSensitiveStep(step) ? MASK : String(step.value);
   return step.selector || "";
 }
 
@@ -474,8 +746,12 @@ function renderSteps(steps) {
 
     const unstable =
       step.selector && step.selectorStable === false
-        ? `<span class="warn" title="Selector may be unstable">⚠</span>`
+        ? `<span class="warn" title="Selector mungkin tidak stabil">${svgIcon("triangle-alert", 12)}</span>`
         : "";
+
+    const secret = isSensitiveStep(step);
+    // autocomplete="new-password" keeps the browser from offering saved logins here.
+    const secretAttrs = secret ? ' type="password" autocomplete="new-password"' : ' type="text"';
 
     const valueRow =
       step.action === "assert"
@@ -487,7 +763,7 @@ function renderSteps(steps) {
           (o) => o.t
         )}</select>
         <label>Expected</label>
-        <input class="fld-avalue" type="text" value="${escapeAttr(
+        <input class="fld-avalue"${secretAttrs} value="${escapeAttr(
           (step.assertion && step.assertion.value) || ""
         )}" placeholder="text / path" />`
         : step.action === "drop"
@@ -503,7 +779,7 @@ function renderSteps(steps) {
         <input class="fld-dy" type="number" value="${Number(step.dy) || 0}" />`
             : `
         <label>Value</label>
-        <input class="fld-value" type="text" value="${escapeAttr(
+        <input class="fld-value"${secretAttrs} value="${escapeAttr(
           step.value == null ? "" : step.value
         )}" />`;
 
@@ -513,7 +789,8 @@ function renderSteps(steps) {
         : `<label>Selector</label><input class="fld-selector" type="text" value="${escapeAttr(step.selector || "")}" />`;
 
     row.innerHTML = `
-      <div class="summary">
+      <div class="summary" tabindex="0" role="button" aria-expanded="${openIdx.has(i)}">
+        <svg class="drag-handle" title="Seret untuk mengurutkan ulang" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></svg>
         <span class="chev">▸</span>
         <span class="idx">${i + 1}</span>
         <span class="act-badge ${badgeClass(step.action)}">${step.action}</span>
@@ -528,10 +805,10 @@ function renderSteps(steps) {
           ${selectorRow}${valueRow}
         </div>
         <div class="actions">
-          <button class="btn sm" data-op="up">↑ Up</button>
-          <button class="btn sm" data-op="down">↓ Down</button>
-          <button class="btn sm" data-op="dup">Duplicate</button>
-          <button class="btn sm danger" data-op="del">Delete</button>
+          <button class="btn sm" data-op="up" aria-label="Pindahkan step ${i + 1} ke atas">↑ Naik</button>
+          <button class="btn sm" data-op="down" aria-label="Pindahkan step ${i + 1} ke bawah">↓ Turun</button>
+          <button class="btn sm" data-op="dup" aria-label="Duplikat step ${i + 1}">Duplikat</button>
+          <button class="btn sm danger" data-op="del" aria-label="Hapus step ${i + 1}">Hapus</button>
         </div>
       </div>`;
     list.appendChild(row);
@@ -545,18 +822,26 @@ async function mutateSteps(fn) {
   const next = fn(sc.steps.slice()) || sc.steps;
   await send("UPDATE_SCENARIO", { index: editingIndex, steps: next });
   renderSteps(next);
+  renderSelectorWarningBanner(next);
+}
+
+function toggleStepOpen(summary) {
+  const step = summary.closest(".step");
+  const open = step.classList.toggle("open");
+  summary.setAttribute("aria-expanded", String(open));
 }
 
 $("#steps-list").addEventListener("click", (e) => {
   const summary = e.target.closest(".summary");
   if (summary && !e.target.closest("button")) {
-    summary.closest(".step").classList.toggle("open");
+    toggleStepOpen(summary);
     return;
   }
   const btn = e.target.closest("button[data-op]");
   if (!btn) return;
   const i = Number(btn.closest(".step").dataset.i);
   const op = btn.dataset.op;
+  if (op === "del" && !confirm(`Hapus step ${i + 1}? Tindakan ini tidak bisa dibatalkan.`)) return;
   mutateSteps((steps) => {
     if (op === "del") steps.splice(i, 1);
     else if (op === "dup") steps.splice(i + 1, 0, JSON.parse(JSON.stringify(steps[i])));
@@ -565,6 +850,90 @@ $("#steps-list").addEventListener("click", (e) => {
       [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]];
     return steps;
   });
+});
+
+// Keyboard parity for the click-to-expand summary row — it's a plain <div>
+// (role="button" + tabindex="0" from renderSteps), so Enter/Space need to be
+// wired up manually the way a native <button> would get for free.
+$("#steps-list").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const summary = e.target.closest(".summary");
+  if (!summary) return;
+  e.preventDefault();
+  toggleStepOpen(summary);
+});
+
+/* ---- drag-to-reorder: grab the handle, drop on the step to land above/below ---- */
+
+let dragFromIndex = null;
+
+function clearDragMarkers() {
+  $$("#steps-list .step").forEach((s) =>
+    s.classList.remove("dragging", "drag-over-top", "drag-over-bottom")
+  );
+}
+
+// Only the handle can start a drag — without this, `draggable` on the whole
+// row would also pick up clicks meant for the summary/buttons.
+$("#steps-list").addEventListener("mousedown", (e) => {
+  const handle = e.target.closest(".drag-handle");
+  if (!handle) return;
+  const step = handle.closest(".step");
+  if (step) step.draggable = true;
+});
+$("#steps-list").addEventListener("mouseup", () => {
+  $$("#steps-list .step").forEach((s) => {
+    if (!s.classList.contains("dragging")) s.draggable = false;
+  });
+});
+
+$("#steps-list").addEventListener("dragstart", (e) => {
+  const step = e.target.closest(".step");
+  if (!step || !step.draggable) {
+    e.preventDefault();
+    return;
+  }
+  dragFromIndex = Number(step.dataset.i);
+  step.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", String(dragFromIndex));
+});
+
+$("#steps-list").addEventListener("dragover", (e) => {
+  const step = e.target.closest(".step");
+  if (!step || dragFromIndex == null) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  $$("#steps-list .step").forEach((s) => s.classList.remove("drag-over-top", "drag-over-bottom"));
+  const rect = step.getBoundingClientRect();
+  const before = e.clientY < rect.top + rect.height / 2;
+  step.classList.toggle("drag-over-top", before);
+  step.classList.toggle("drag-over-bottom", !before);
+});
+
+$("#steps-list").addEventListener("drop", (e) => {
+  const step = e.target.closest(".step");
+  e.preventDefault();
+  const from = dragFromIndex;
+  dragFromIndex = null;
+  clearDragMarkers();
+  if (!step || from == null) return;
+  const overIndex = Number(step.dataset.i);
+  const rect = step.getBoundingClientRect();
+  const before = e.clientY < rect.top + rect.height / 2;
+  const to = before ? overIndex : overIndex + 1;
+  if (to === from || to === from + 1) return; // dropped back where it started
+  mutateSteps((steps) => {
+    const [moved] = steps.splice(from, 1);
+    steps.splice(from < to ? to - 1 : to, 0, moved);
+    return steps;
+  });
+});
+
+$("#steps-list").addEventListener("dragend", () => {
+  dragFromIndex = null;
+  $$("#steps-list .step").forEach((s) => (s.draggable = false));
+  clearDragMarkers();
 });
 
 $("#steps-list").addEventListener("change", (e) => {
@@ -628,7 +997,7 @@ async function saveScenarioName() {
 $("#btn-save-scenario").addEventListener("click", async () => {
   const name = $("#scenarioName").value.trim() || "Scenario " + (editingIndex + 1);
   await send("SAVE_SCENARIO", { index: editingIndex, name });
-  setFoot("Saved: " + name);
+  setFoot("Tersimpan: " + name);
   enterSuite();
 });
 $("#btn-scenario-back").addEventListener("click", async () => {
@@ -646,9 +1015,9 @@ function syncFrameworkUi() {
   $$("#fw-switch .fw").forEach((b) =>
     b.classList.toggle("active", b.dataset.fw === framework)
   );
-  $("#btn-generate").textContent = "⚙ Generate " + g.label;
-  $("#btn-generate-all").textContent = "⚙ Generate " + g.label + " — all suites combined";
-  $("#code-title").textContent = "Generated " + g.label;
+  $("#btn-generate").innerHTML = svgIcon("code") + " Generate " + g.label;
+  $("#btn-generate-all").innerHTML = svgIcon("code") + " Generate " + g.label + " — gabungan semua suite";
+  $("#code-title").textContent = "Kode " + g.label + " hasil generate";
 }
 
 async function setFramework(id) {
@@ -663,16 +1032,21 @@ async function setFramework(id) {
     generated = null;
     return;
   }
-  if (codeSource === "project" && generatedSuitesRaw) {
-    generated = gen().generateProjectFiles(generatedSuitesRaw);
-  } else {
-    const session = await getSession();
-    if (!session || !(session.scenarios || []).some((s) => (s.steps || []).length)) return;
-    generated = gen().generateFiles(session);
+  try {
+    if (codeSource === "project" && generatedSuitesRaw) {
+      generated = gen().generateProjectFiles(generatedSuitesRaw);
+    } else {
+      const session = await getSession();
+      if (!session || !(session.scenarios || []).some((s) => (s.steps || []).length)) return;
+      generated = gen().generateFiles(session);
+    }
+  } catch (e) {
+    setFoot("Gagal generate kode: " + (e && e.message ? e.message : e));
+    return;
   }
   activeFile = null; // file paths differ per framework
   syncTabs();
-  setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
+  setFoot("Berhasil generate " + Object.keys(generated.files).length + " file " + gen().label);
 }
 
 $("#fw-switch").addEventListener("click", (e) => {
@@ -693,55 +1067,70 @@ async function hasSteps() {
 function setCodeSource(mode) {
   codeSource = mode;
   const isProject = mode === "project";
-  $("#btn-play-2").title = isProject ? "Play every suite in this project, one after another" : "";
+  $("#btn-play-2").title = isProject ? "Jalankan setiap suite di project ini, satu per satu" : "";
   syncFrameworkUi();
 }
 
 $("#btn-generate").addEventListener("click", async () => {
-  const session = await getSession();
   if (!(await hasSteps())) {
-    setFoot("Record at least one step first");
+    setFoot("Rekam minimal satu step dulu");
     return;
   }
-  generated = gen().generateFiles(session);
-  generatedSuitesRaw = null;
-  activeFile = null;
-  setFoot("Generated " + Object.keys(generated.files).length + " " + gen().label + " files");
-  setCodeSource("suite");
-  activeCodeTab = "spec";
-  syncTabs();
-  showView("view-code");
+  await withBusy($("#btn-generate"), svgIcon("code") + " Generating…", async () => {
+    const session = await getSession();
+    try {
+      generated = gen().generateFiles(session);
+    } catch (e) {
+      setFoot("Gagal generate kode: " + (e && e.message ? e.message : e));
+      return;
+    }
+    generatedSuitesRaw = null;
+    activeFile = null;
+    setFoot("Berhasil generate " + Object.keys(generated.files).length + " file " + gen().label);
+    setCodeSource("suite");
+    activeCodeTab = "spec";
+    syncTabs();
+    showView("view-code");
+  });
 });
 
 $("#btn-generate-all").addEventListener("click", async () => {
+  const btn = $("#btn-generate-all");
   const res = await send("EXPORT_ALL_SUITES");
   const suites = ((res && res.suites) || []).filter((s) =>
     (s.scenarios || []).some((sc) => (sc.steps || []).length)
   );
   if (!suites.length) {
-    setFoot("No recorded steps in any suite yet");
+    setFoot("Belum ada step yang direkam di suite manapun");
     return;
   }
-  generated = gen().generateProjectFiles(suites);
-  if (!generated.files || !Object.keys(generated.files).length) {
-    setFoot("Nothing to generate");
-    return;
-  }
-  generatedSuitesRaw = suites;
-  activeFile = null;
-  setFoot(
-    "Generated " +
-      Object.keys(generated.files).length +
-      " " +
-      gen().label +
-      " files from " +
-      suites.length +
-      " suite(s)"
-  );
-  setCodeSource("project");
-  activeCodeTab = "spec";
-  syncTabs();
-  showView("view-code");
+  await withBusy(btn, svgIcon("code") + " Generating…", async () => {
+    try {
+      generated = gen().generateProjectFiles(suites);
+    } catch (e) {
+      setFoot("Gagal generate kode: " + (e && e.message ? e.message : e));
+      return;
+    }
+    if (!generated.files || !Object.keys(generated.files).length) {
+      setFoot("Tidak ada yang bisa di-generate");
+      return;
+    }
+    generatedSuitesRaw = suites;
+    activeFile = null;
+    setFoot(
+      "Generated " +
+        Object.keys(generated.files).length +
+        " file " +
+        gen().label +
+        " dari " +
+        suites.length +
+        " suite"
+    );
+    setCodeSource("project");
+    activeCodeTab = "spec";
+    syncTabs();
+    showView("view-code");
+  });
 });
 
 // Every framework lays its Page Object Model out the same way, so only the
@@ -761,7 +1150,7 @@ function syncTabs() {
     t.classList.toggle("active", t.dataset.tab === activeCodeTab)
   );
   if (!generated) {
-    $("#code-out").textContent = "// Generate first";
+    $("#code-out").innerHTML = highlightJS("// Generate first");
     return;
   }
   if (activeCodeTab === "structure") {
@@ -781,9 +1170,9 @@ function syncTabs() {
   if (sel)
     sel.addEventListener("change", () => {
       activeFile = sel.value;
-      $("#code-out").textContent = generated.files[activeFile] || "";
+      $("#code-out").innerHTML = highlightJS(generated.files[activeFile] || "");
     });
-  $("#code-out").textContent = activeFile ? generated.files[activeFile] : "// nothing on this tab";
+  $("#code-out").innerHTML = highlightJS(activeFile ? generated.files[activeFile] : "// nothing on this tab");
 }
 
 function renderTree(paths) {
@@ -816,9 +1205,9 @@ $("#code-tabs").addEventListener("click", (e) => {
 $("#btn-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText($("#code-out").textContent);
-    setFoot("Copied");
+    setFoot("Tersalin");
   } catch (e) {
-    setFoot("Copy failed");
+    setFoot("Gagal menyalin");
   }
 });
 $("#btn-code-back").addEventListener("click", () => {
@@ -843,10 +1232,35 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function exportFilesAsZip(files, rootLabel) {
+// Framework-appropriate folder for the fixture below — matches the "// TODO:
+// put ... in <dir>" comment gen-core.js already writes next to every upload
+// call, so the reference in the code and the file actually in the zip agree.
+function fixtureDirFor(fw) {
+  if (fw === "cypress") return "cypress/fixtures";
+  if (fw === "webdriverio" || fw === "selenium") return "test/fixtures";
+  return "fixtures";
+}
+
+async function exportFilesAsZip(files, rootLabel, note) {
   const root = safeName(rootLabel);
   const prefixed = {};
   Object.keys(files).forEach((p) => (prefixed[root + "/" + p] = files[p]));
+
+  // gen-core.js swaps every recorded image-upload filename for
+  // "tije-test-logo.png" (the recorder never captures real file bytes, so
+  // the original name has nothing to point at). Embed the actual PNG here so
+  // an exported project that references it can run immediately instead of
+  // erroring on a fixture that was never there.
+  if (Object.values(files).some((c) => typeof c === "string" && c.includes("tije-test-logo.png"))) {
+    try {
+      const res = await fetch(chrome.runtime.getURL("fixtures/tije-test-logo.png"));
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      prefixed[root + "/" + fixtureDirFor(framework) + "/tije-test-logo.png"] = bytes;
+    } catch (e) {
+      /* best-effort — the code comment still tells the user where to put it */
+    }
+  }
+
   const blob = window.makeZip(prefixed);
   const filename = root + ".zip";
   try {
@@ -861,48 +1275,65 @@ async function exportFilesAsZip(files, rootLabel) {
       a.click();
       a.remove();
     }
-    setFoot("Exported " + filename);
+    setFoot("Diekspor " + filename + (note || ""));
   } catch (e) {
-    setFoot("Export failed: " + e.message);
+    setFoot("Ekspor gagal: " + e.message);
   }
 }
 
 async function exportProject() {
   const session = await getSession();
   if (!(await hasSteps())) {
-    setFoot("Nothing to export");
+    setFoot("Tidak ada yang bisa diekspor");
     return;
   }
-  const { files } = gen().generateFiles(session);
-  // Tuck the raw session into the ZIP so the whole thing can be re-imported.
+  let files;
+  try {
+    ({ files } = gen().generateFiles(session));
+  } catch (e) {
+    setFoot("Gagal generate kode: " + (e && e.message ? e.message : e));
+    return;
+  }
+  // Tuck the session into the ZIP so the whole thing can be re-imported.
   // The folder name is part of the import contract — don't rename it.
+  // Passwords are blanked first: the generated code already reads them from
+  // the environment, and this file would otherwise carry them straight into
+  // whatever repo the project lands in.
+  const { session: safe, blanked } = withoutSecrets(session);
   const filesWithSession = {
     ...files,
-    ".cypress-recorder/session.json": JSON.stringify(session, null, 2)
+    ".cypress-recorder/session.json": JSON.stringify(safe, null, 2)
   };
-  await exportFilesAsZip(filesWithSession, session.projectName || session.suiteName);
+  await exportFilesAsZip(
+    filesWithSession,
+    session.projectName || session.suiteName,
+    blanked ? " — " + blanked + " password tidak disertakan (isi lewat .env)" : ""
+  );
 }
 
 async function exportGeneratedProject() {
   if (!generated || !generated.files || !Object.keys(generated.files).length) {
-    setFoot("Nothing to export");
+    setFoot("Tidak ada yang bisa diekspor");
     return;
   }
   await exportFilesAsZip(generated.files, generated.projectName || "cypress-project");
 }
 
-$("#btn-export-1").addEventListener("click", exportProject);
-$("#btn-export-2").addEventListener("click", () => {
-  if (codeSource === "project") return exportGeneratedProject();
-  return exportProject();
-});
+$("#btn-export-1").addEventListener("click", () =>
+  withBusy($("#btn-export-1"), svgIcon("download") + " Exporting…", exportProject)
+);
+$("#btn-export-2").addEventListener("click", () =>
+  withBusy($("#btn-export-2"), svgIcon("download") + " Exporting…", () =>
+    codeSource === "project" ? exportGeneratedProject() : exportProject()
+  )
+);
 
 /* ------------------------------ session import / export ------------------------------ */
 
 async function exportSession() {
   const session = await getSession();
   if (!session || !(session.scenarios || []).length) {
-    setFoot("Nothing to save");
+    setFoot("Tidak ada yang bisa disimpan");
     return;
   }
   const json = JSON.stringify(session, null, 2);
@@ -923,9 +1354,14 @@ async function exportSession() {
       a.click();
       a.remove();
     }
-    setFoot("Saved " + filename);
+    // A backup has to restore everything, so unlike a project export it
+    // keeps passwords — say so, since the file is easy to pass around.
+    const kept = countSecrets(session.scenarios, true);
+    setFoot(
+      "Tersimpan " + filename + (kept ? " — berisi " + kept + " password dalam teks biasa, jangan dibagikan" : "")
+    );
   } catch (e) {
-    setFoot("Save failed: " + e.message);
+    setFoot("Gagal menyimpan: " + e.message);
   }
 }
 
@@ -976,22 +1412,22 @@ function renderImportReport(report, warnings) {
     return;
   }
   const parts = [];
-  parts.push(`<h4>Imported ${report.scenarios} scenario(s) from ${report.specs} spec file(s)</h4>`);
+  parts.push(`<h4>Berhasil impor ${report.scenarios} scenario dari ${report.specs} file spec</h4>`);
   parts.push(
-    `<div class="sum">${report.clean} play cleanly · ${report.partial} partial` +
-      (report.empty ? ` · ${report.empty} empty` : "") +
+    `<div class="sum">${report.clean} berjalan bersih · ${report.partial} sebagian` +
+      (report.empty ? ` · ${report.empty} kosong` : "") +
       `</div>`
   );
   if (warnings && warnings.length) {
     const items = warnings
       .map(
         (w) =>
-          `<li><span class="scn">${escapeHtml(w.scenario)}</span> — ${w.steps} step(s) kept` +
+          `<li><span class="scn">${escapeHtml(w.scenario)}</span> — ${w.steps} step disimpan` +
           `<br><span class="iss">${w.issues.map((i) => escapeHtml(i)).join(" · ")}</span></li>`
       )
       .join("");
     parts.push(
-      `<details><summary>${warnings.length} scenario(s) had lines that can't replay in the browser</summary>` +
+      `<details><summary>${warnings.length} scenario punya baris yang tidak bisa diputar ulang di browser</summary>` +
         `<ul>${items}</ul></details>`
     );
   }
@@ -1007,8 +1443,12 @@ async function installSession(session) {
   generated = null;
   lastPlayArgs = null;
   stopPlayPoll();
+  // A project export leaves passwords out (see withoutSecrets) — remind whoever
+  // imports it that they are empty and have to be filled in before playing.
+  const empty = countSecrets(session.scenarios, false);
   setFoot(
-    "Imported “" + (res.suiteName || "session") + "” — " + (res.scenarios || 0) + " scenario(s)"
+    "Berhasil impor “" + (res.suiteName || "session") + "” — " + (res.scenarios || 0) + " scenario" +
+      (empty ? " — " + empty + " password masih kosong, isi di editor sebelum Play" : "")
   );
   await boot();
   if (report) {
@@ -1032,15 +1472,15 @@ function renderSpecPicker(specs) {
     )
     .join("");
   box.innerHTML = `
-    <h4>${specs.length} test suites in this project</h4>
-    <div class="sum">Each <code>.cy.js</code> file imports as one suite; every <code>it()</code> becomes a scenario.</div>
+    <h4>${specs.length} test suite di project ini</h4>
+    <div class="sum">Setiap file <code>.cy.js</code> diimpor sebagai satu suite; setiap <code>it()</code> menjadi satu scenario.</div>
     <select id="spec-select">
       ${opts}
-      <option value="__all">— All suites merged into one (${total} scenarios) —</option>
+      <option value="__all">— Semua suite digabung jadi satu (${total} scenario) —</option>
     </select>
     <div class="row">
-      <button id="btn-spec-import" class="btn primary sm">Import selected suite</button>
-      <button id="btn-spec-cancel" class="btn ghost sm">Cancel</button>
+      <button id="btn-spec-import" class="btn primary sm">Impor suite terpilih</button>
+      <button id="btn-spec-cancel" class="btn ghost sm">Batal</button>
     </div>`;
   box.hidden = false;
   $("#btn-spec-import").addEventListener("click", importChosenSpec);
@@ -1092,7 +1532,7 @@ async function handleImportFile(file) {
       pendingImport = { files: parsed.files };
       showView("view-setup");
       renderSpecPicker(specs);
-      setFoot(specs.length + " test suites found — pick one to import");
+      setFoot(specs.length + " test suite ditemukan — pilih satu untuk diimpor");
       return;
     }
     await installSession(window.CypressImport.projectToSession(parsed.files));
@@ -1126,7 +1566,7 @@ function stopPlayPoll() {
 async function startPlayback(args) {
   const res = await send("PLAY_START", args);
   if (!res.ok) {
-    setFoot(res.reason ? "Can't play: " + res.reason : "Can't play");
+    setFoot(res.reason ? "Tidak bisa dijalankan: " + res.reason : "Tidak bisa dijalankan");
     return false;
   }
   lastPlayArgs = args;
@@ -1148,12 +1588,12 @@ async function startPlayback(args) {
 // starts polling PLAY_STATE, whose `suiteQueue` field reports progress.
 async function startPlayAllSuites(entries) {
   if (!entries || !entries.length) {
-    setFoot("Nothing to play");
+    setFoot("Tidak ada yang bisa dijalankan");
     return;
   }
   const res = await send("PLAY_SUITES_START", { entries });
   if (!res.ok) {
-    setFoot(res.reason ? "Can't play: " + res.reason : "Can't play");
+    setFoot(res.reason ? "Tidak bisa dijalankan: " + res.reason : "Tidak bisa dijalankan");
     return;
   }
   lastPlayQueueEntries = entries;
@@ -1202,8 +1642,8 @@ async function renderPlayback() {
     queue && queue.entries && queue.entries.length
       ? `Suite ${Math.min(queue.idx + 1, queue.entries.length)}/${queue.entries.length}: ${(queue.entries[queue.idx] || {}).name || ""}`
       : plan.length > 1
-        ? `Playing ${plan.length} scenarios`
-        : "Playing: " + (pb.scenarioName || "scenario");
+        ? `Menjalankan ${plan.length} scenario`
+        : "Menjalankan: " + (pb.scenarioName || "scenario");
 
   const byKey = {};
   results.forEach((r) => {
@@ -1222,13 +1662,13 @@ async function renderPlayback() {
       const r = byKey[si + ":" + k];
       const isCurrent = pb.active && pb.scenarioIndex === si && pb.stepIndex === k;
       let state = "pending";
-      let icon = "•";
+      let icon = svgIcon("circle", 10);
       if (r) {
         state = r.status;
-        icon = r.status === "passed" ? "✓" : r.status === "failed" ? "✗" : "–";
+        icon = r.status === "passed" ? svgIcon("check", 12) : r.status === "failed" ? svgIcon("x", 12) : "–";
       } else if (isCurrent) {
         state = "running";
-        icon = "▸";
+        icon = svgIcon("play", 10);
       }
       const name = st.elementName || st.url || st.action;
       html.push(`
@@ -1263,10 +1703,13 @@ async function renderPlayback() {
     $("#btn-play-again").style.display = "";
     if (queue && queue.summaries && queue.summaries.length) {
       renderMultiPlaySummary(queue.summaries);
-      setFoot("Playback finished — " + queue.summaries.length + " suite(s)");
+      setFoot("Selesai — " + queue.summaries.length + " suite");
     } else {
       renderPlaySummary(pb);
-      setFoot("Playback " + pb.status);
+      setFoot(
+        "Selesai: " +
+          (pb.status === "passed" ? "berhasil" : pb.status === "stopped" ? "dihentikan" : "gagal")
+      );
     }
   }
 }
@@ -1281,20 +1724,21 @@ function renderPlaySummary(pb) {
   const secs = pb.startedAt ? ((pb.finishedAt || Date.now()) - pb.startedAt) / 1000 : 0;
   const cls = pb.status === "passed" ? "pass" : pb.status === "stopped" ? "err" : "fail";
   const label =
-    pb.status === "passed" ? "PASSED" : pb.status === "stopped" ? "STOPPED" : "FAILED";
-  const icon = pb.status === "passed" ? "✓" : pb.status === "stopped" ? "■" : "✕";
+    pb.status === "passed" ? "BERHASIL" : pb.status === "stopped" ? "DIHENTIKAN" : "GAGAL";
+  const icon =
+    pb.status === "passed" ? svgIcon("check", 16) : pb.status === "stopped" ? svgIcon("square", 16) : svgIcon("x", 16);
   const skipNote = skipped
     ? failed
-      ? `${skipped} step${skipped === 1 ? "" : "s"} skipped (after the failure, or can't run in-browser).`
-      : `${skipped} step${skipped === 1 ? "" : "s"} skipped — can't run in the browser (e.g. file upload). They are still in the exported project.`
+      ? `${skipped} step dilewati (setelah kegagalan, atau tidak bisa dijalankan di browser).`
+      : `${skipped} step dilewati — tidak bisa dijalankan di browser (mis. upload file). Tetap ada di project hasil ekspor.`
     : "";
   box.innerHTML = `
     <div class="run-banner ${cls}"><span class="big">${icon}</span> ${label}</div>
     <div class="run-grid">
-      <div class="cell"><div class="k">Duration</div><div class="v">${secs.toFixed(1)}s</div></div>
+      <div class="cell"><div class="k">Durasi</div><div class="v">${secs.toFixed(1)}s</div></div>
       <div class="cell"><div class="k">Steps</div><div class="v">${results.length}</div></div>
-      <div class="cell"><div class="k">Passed</div><div class="v">${passed}</div></div>
-      <div class="cell"><div class="k">Failed</div><div class="v">${failed}</div></div>
+      <div class="cell"><div class="k">Berhasil</div><div class="v">${passed}</div></div>
+      <div class="cell"><div class="k">Gagal</div><div class="v">${failed}</div></div>
     </div>
     ${skipNote ? `<div class="hint">${skipNote}</div>` : ""}`;
 }
@@ -1303,32 +1747,38 @@ function renderMultiPlaySummary(summaries) {
   const box = $("#play-summary");
   box.style.display = "block";
   if (!summaries.length) {
-    box.innerHTML = `<div class="run-banner err"><span class="big">■</span> STOPPED</div>`;
+    box.innerHTML = `<div class="run-banner err"><span class="big">${svgIcon("square", 16)}</span> DIHENTIKAN</div>`;
     return;
   }
   const anyFailed = summaries.some((s) => s.status === "failed" || s.status === "error");
   const totalPassed = summaries.reduce((n, s) => n + (s.passed || 0), 0);
   const totalFailed = summaries.reduce((n, s) => n + (s.failed || 0), 0);
   const cls = anyFailed ? "fail" : "pass";
-  const icon = anyFailed ? "✕" : "✓";
-  const label = anyFailed ? "SOME SUITES FAILED" : "ALL SUITES PASSED";
+  const icon = anyFailed ? svgIcon("x", 16) : svgIcon("check", 16);
+  const label = anyFailed ? "ADA SUITE YANG GAGAL" : "SEMUA SUITE BERHASIL";
   const rows = summaries
     .map((s) => {
       const ricon =
-        s.status === "passed" ? "✓" : s.status === "stopped" ? "■" : s.status === "error" ? "⚠" : "✕";
+        s.status === "passed"
+          ? svgIcon("check", 12)
+          : s.status === "stopped"
+            ? svgIcon("square", 12)
+            : s.status === "error"
+              ? svgIcon("triangle-alert", 12)
+              : svgIcon("x", 12);
       const tail =
         s.status === "error"
-          ? "could not run"
-          : `${s.passed || 0} passed${s.failed ? ", " + s.failed + " failed" : ""}`;
+          ? "tidak bisa dijalankan"
+          : `${s.passed || 0} berhasil${s.failed ? ", " + s.failed + " gagal" : ""}`;
       return `<div class="play-scn-head">${ricon} ${escapeHtml(s.name)} — ${tail}</div>`;
     })
     .join("");
   box.innerHTML = `
     <div class="run-banner ${cls}"><span class="big">${icon}</span> ${label}</div>
     <div class="run-grid">
-      <div class="cell"><div class="k">Suites</div><div class="v">${summaries.length}</div></div>
-      <div class="cell"><div class="k">Passed steps</div><div class="v">${totalPassed}</div></div>
-      <div class="cell"><div class="k">Failed steps</div><div class="v">${totalFailed}</div></div>
+      <div class="cell"><div class="k">Suite</div><div class="v">${summaries.length}</div></div>
+      <div class="cell"><div class="k">Step berhasil</div><div class="v">${totalPassed}</div></div>
+      <div class="cell"><div class="k">Step gagal</div><div class="v">${totalFailed}</div></div>
     </div>
     ${rows}`;
 }
@@ -1340,7 +1790,7 @@ $("#btn-play-all").addEventListener("click", () => {
 $("#btn-play-2").addEventListener("click", () => {
   if (codeSource === "project") {
     if (!generatedSuitesRaw || !generatedSuitesRaw.length) {
-      setFoot("Nothing to play");
+      setFoot("Tidak ada yang bisa dijalankan");
       return;
     }
     startPlayAllSuites(generatedSuitesRaw.map((s) => ({ id: s.id, name: s.suiteName || "Suite" })));
@@ -1393,6 +1843,12 @@ function saveSettings(patch) {
 /* ------------------------------ reset ------------------------------ */
 
 $("#btn-reset").addEventListener("click", async () => {
+  // This wipes the whole in-progress session (RESET in background.js) —
+  // confirmed as the exact action behind the "kehilangan data" complaint,
+  // since it used to fire instantly on a single click.
+  if (!confirm("Hapus seluruh sesi yang sedang berjalan? Rekaman yang belum tersimpan ke suite akan hilang.")) {
+    return;
+  }
   await send("PLAY_STOP");
   await send("RESET");
   generated = null;
@@ -1407,13 +1863,38 @@ $("#btn-reset").addEventListener("click", async () => {
     $("#spec-picker").hidden = true;
     $("#spec-picker").innerHTML = "";
   }
-  setFoot("Session cleared");
+  setFoot("Sesi dihapus");
   boot();
 });
+
+/* ------------------------------ onboarding ------------------------------ */
+
+function showOnboarding() {
+  const el = $("#onboarding");
+  if (el) el.hidden = false;
+}
+function hideOnboarding() {
+  const el = $("#onboarding");
+  if (el) el.hidden = true;
+}
+$("#btn-onboarding-done")?.addEventListener("click", async () => {
+  hideOnboarding();
+  await new Promise((r) => chrome.storage.local.set({ onboardingSeen: true }, r));
+});
+$("#btn-help")?.addEventListener("click", showOnboarding);
+
+async function maybeShowOnboarding() {
+  const { onboardingSeen } = await new Promise((r) =>
+    chrome.storage.local.get("onboardingSeen", r)
+  );
+  if (!onboardingSeen) showOnboarding();
+}
 
 /* ------------------------------ boot ------------------------------ */
 
 async function boot() {
+  await maybeShowOnboarding();
+
   const settings = await getSettings();
   if (settings.framework && window.Generators.byId[settings.framework]) {
     framework = settings.framework;

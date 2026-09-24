@@ -1,294 +1,1102 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <link rel="stylesheet" href="popup.css" />
-  <title>QA Web Recorder</title>
-</head>
-<body>
-  <div class="shell">
-    <!-- ================= SIDEBAR ================= -->
-    <aside class="sidebar">
-      <div class="brand">
-        <img class="brand-mark" src="../icons/tije-test-logo.png" alt="Tije-Test logo" />
-        <div class="brand-copy">
-          <strong>QA Web Recorder</strong>
-          <small>Record → Review → Run</small>
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="popup.css" />
+    <title>QA Web Recorder</title>
+  </head>
+  <body>
+    <!-- ================= ONBOARDING (first run only) ================= -->
+    <div
+      id="onboarding"
+      class="onboarding"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-title"
+      hidden
+    >
+      <div class="onboarding-card">
+        <h2 id="onboarding-title" class="sr-only">
+          Cara kerja QA Web Recorder
+        </h2>
+        <div class="onboarding-steps" id="onboarding-steps">
+          <div class="onboarding-step">
+            <div class="ob-icon">
+              <svg
+                class="icon"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                />
+              </svg>
+            </div>
+            <h3>Suite</h3>
+            <p>
+              Kumpulan skenario test untuk satu halaman/fitur. Contoh: suite
+              "Login" berisi semua skenario terkait login.
+            </p>
+          </div>
+          <div class="onboarding-step">
+            <div class="ob-icon">
+              <svg
+                class="icon"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+                <line x1="7" x2="7" y1="2" y2="22" />
+                <line x1="17" x2="17" y1="2" y2="22" />
+                <line x1="2" x2="22" y1="12" y2="12" />
+                <line x1="2" x2="7" y1="7" y2="7" />
+                <line x1="2" x2="7" y1="17" y2="17" />
+                <line x1="17" x2="22" y1="17" y2="17" />
+                <line x1="17" x2="22" y1="7" y2="7" />
+              </svg>
+            </div>
+            <h3>Scenario</h3>
+            <p>
+              Satu alur/cerita test di dalam suite. Contoh: "Admin berhasil
+              login" adalah satu scenario.
+            </p>
+          </div>
+          <div class="onboarding-step">
+            <div class="ob-icon">
+              <svg
+                class="icon"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14 4.1 12 6" />
+                <path d="m5.1 8-2.9-.8" />
+                <path d="m6 12-1.9 2" />
+                <path d="M7.2 2.2 8 5.1" />
+                <path
+                  d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"
+                />
+              </svg>
+            </div>
+            <h3>Step</h3>
+            <p>
+              Satu aksi yang direkam di dalam scenario — klik, ketik, scroll,
+              dan seterusnya.
+            </p>
+          </div>
+        </div>
+        <div class="row">
+          <button id="btn-onboarding-done" class="btn primary full">
+            Mengerti, mulai
+          </button>
         </div>
       </div>
+    </div>
 
-      <!-- One recording, any framework: only code generation differs. -->
-      <div class="fw-block">
-        <div class="fw-label">Framework</div>
-        <div class="fw-switch" id="fw-switch">
-          <button class="fw" data-fw="cypress" title="Generate Cypress (cy.*) specs">Cypress</button>
-          <button class="fw" data-fw="playwright" title="Generate Playwright (@playwright/test) specs">Playwright</button>
-          <button class="fw" data-fw="webdriverio" title="Generate WebdriverIO (mocha) specs">WebdriverIO</button>
+    <div class="shell">
+      <!-- ================= SIDEBAR ================= -->
+      <aside class="sidebar">
+        <div class="brand">
+          <img
+            class="brand-mark"
+            src="../icons/tije-test-logo.png"
+            alt="Tije-Test logo"
+          />
+          <div class="brand-copy">
+            <strong>QA Web Recorder</strong>
+          </div>
         </div>
-      </div>
 
-      <button id="btn-suites" class="btn sm full" title="Browse every saved suite">📁 All suites</button>
+        <!-- One recording, any framework: only code generation differs. -->
+        <div class="fw-block">
+          <div class="fw-label">Framework</div>
+          <div class="fw-switch" id="fw-switch">
+            <button
+              class="fw"
+              data-fw="cypress"
+              title="Generate Cypress (cy.*) specs"
+            >
+              Cypress
+            </button>
+            <button
+              class="fw"
+              data-fw="playwright"
+              title="Generate Playwright (@playwright/test) specs"
+            >
+              Playwright
+            </button>
+            <button
+              class="fw"
+              data-fw="webdriverio"
+              title="Generate WebdriverIO (mocha) specs"
+            >
+              WebdriverIO
+            </button>
+            <button
+              class="fw"
+              data-fw="selenium"
+              title="Generate Selenium WebDriver (mocha + chai) specs"
+            >
+              Selenium
+            </button>
+          </div>
+        </div>
 
-      <!-- Progress indicator — where am I in the flow -->
-      <nav class="stepper" id="stepper">
-        <span class="step-node" data-step="0"><b>1</b><span class="step-label">Setup</span></span>
-        <span class="step-node" data-step="1"><b>2</b><span class="step-label">Record</span></span>
-        <span class="step-node" data-step="2"><b>3</b><span class="step-label">Review</span></span>
-        <span class="step-node" data-step="3"><b>4</b><span class="step-label">Run</span></span>
-      </nav>
+        <div class="sidebar-foot">
+          <button
+            id="btn-reset"
+            class="btn sm full"
+            title="Hapus seluruh sesi yang sedang berjalan"
+          >
+            <svg
+              class="icon"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+            Reset session
+          </button>
+          <button
+            id="btn-help"
+            class="btn sm ghost full"
+            title="Tampilkan lagi penjelasan Suite/Scenario/Step"
+          >
+            ? Help
+          </button>
+          <small class="muted">v0.4.0</small>
+          <a
+            class="credit"
+            href="https://www.linkedin.com/in/rahmat-sasongko/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >by Rahmat Sasongko</a
+          >
+        </div>
+      </aside>
 
-      <div class="sidebar-foot">
-        <button id="btn-reset" class="btn sm full" title="Discard the whole session">↺ Reset session</button>
-        <small class="muted">v0.4.0</small>
-      </div>
-    </aside>
+      <!-- ================= CONTENT ================= -->
+      <div class="content-col">
+        <header class="topbar">
+          <button
+            id="btn-suites"
+            class="switcher"
+            title="Lihat semua suite tersimpan"
+          >
+            <span class="sw-icon"
+              ><svg
+                class="icon"
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                /></svg
+            ></span>
+            <span class="sw-body">
+              <small>Suite</small>
+              <strong id="crumb-suite">Semua suite</strong>
+            </span>
+            <span class="sw-chev"
+              ><svg
+                class="icon"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m6 9 6 6 6-6" /></svg
+            ></span>
+          </button>
 
-    <!-- ================= CONTENT ================= -->
-    <div class="content-col">
-      <header class="topbar">
-        <span class="spacer"></span>
-        <small class="muted" id="foot-status">Ready</small>
-      </header>
+          <!-- Progress indicator — where am I di alur perekaman -->
+          <nav class="stepper" id="stepper">
+            <span class="step-node" data-step="0"
+              ><b>1</b><span class="step-label">Start</span></span
+            >
+            <span class="step-node" data-step="1"
+              ><b>2</b><span class="step-label">Record</span></span
+            >
+            <span class="step-node" data-step="2"
+              ><b>3</b><span class="step-label">Review</span></span
+            >
+            <span class="step-node" data-step="3"
+              ><b>4</b><span class="step-label">Run</span></span
+            >
+          </nav>
 
-      <main>
-        <!-- Shared hidden pickers (kept outside the views so a hidden parent
+          <span class="spacer"></span>
+          <small class="muted" id="foot-status">Ready</small>
+        </header>
+
+        <main>
+          <!-- Shared hidden pickers (kept outside the views so a hidden parent
              never blocks the programmatic click). -->
-        <input type="file" id="import-file" accept=".json,.zip,application/json,application/zip" hidden />
-        <input type="file" id="import-suites-file" accept=".json,application/json" hidden />
+          <input
+            type="file"
+            id="import-file"
+            accept=".json,.zip,application/json,application/zip"
+            hidden
+          />
+          <input
+            type="file"
+            id="import-suites-file"
+            accept=".json,application/json"
+            hidden
+          />
 
-        <!-- ================= SUITES LIBRARY ================= -->
-        <section id="view-suites" class="view">
-          <div class="view-head">
-            <h2>Test suites</h2>
-            <p class="view-desc">Pick a suite to keep working on it, or add a new one. Nothing is discarded when you switch.</p>
-          </div>
-
-          <div class="list-head">
-            <strong>Your suites</strong>
-            <button id="btn-add-suite" class="btn sm">＋ Add Suite</button>
-          </div>
-          <div id="suites-list"></div>
-          <div class="empty" id="suites-empty" style="display:none;">
-            No suites yet — add one to get started.
-          </div>
-
-          <div class="row wrap actions-primary">
-            <button id="btn-export-suites" class="btn sm">⬇ Export all suites</button>
-            <button id="btn-import-suites" class="btn sm">⬆ Import suites</button>
-          </div>
-          <p class="hint">
-            Exports every saved suite into one <code>.json</code> bundle. Importing a bundle
-            <em>adds</em> its suites to your library — it never replaces or removes what's already here.
-          </p>
-
-          <div class="row wrap actions-primary">
-            <button id="btn-generate-all" class="btn primary full">⚙ Generate code — all suites combined</button>
-          </div>
-          <p class="hint">
-            Merges every saved suite into <strong>one Cypress project</strong>: one spec file per suite,
-            with shared Page Objects when two suites touch the same page. Ready to copy or export as a single repo.
-          </p>
-        </section>
-
-        <!-- ================= SETUP ================= -->
-        <section id="view-setup" class="view">
-          <div class="view-head">
-            <h2>Start a test suite</h2>
-            <p class="view-desc">Name the suite and the page you want to test. Recording opens in a new tab.</p>
-          </div>
-
-          <div class="field-grid">
-            <div class="field">
-              <label for="projectName">Project name</label>
-              <input type="text" id="projectName" placeholder="TIJE Dashboard" />
+          <!-- ================= SUITES LIBRARY ================= -->
+          <section id="view-suites" class="view">
+            <div class="view-head">
+              <h2>Test Suite</h2>
+              <p class="view-desc">
+                Pilih suite untuk melanjutkan, atau tambah yang baru. Tidak ada
+                yang hilang saat kamu berpindah suite.
+              </p>
             </div>
-            <div class="field">
-              <label for="suiteName">Test suite name</label>
-              <input type="text" id="suiteName" placeholder="Login" />
-              <div class="hint">Becomes <code>describe(...)</code> and the spec file name.</div>
+
+            <div class="list-head">
+              <strong>Suite kamu</strong>
+              <button id="btn-add-suite" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 12h14" />
+                  <path d="M12 5v14" />
+                </svg>
+                Tambah Suite
+              </button>
             </div>
-          </div>
-
-          <label for="targetUrl">Target URL</label>
-          <input type="url" id="targetUrl" placeholder="https://example.com/login" />
-
-          <div class="error" id="setup-error"></div>
-
-          <div class="row">
-            <button id="btn-start" class="btn primary lg">● Start recording — Scenario 1</button>
-          </div>
-          <div class="row">
-            <button id="btn-import" class="btn sm ghost">⬆ Import saved session (.json / .zip)</button>
-          </div>
-          <div id="spec-picker" class="import-report" hidden></div>
-        </section>
-
-        <!-- ================= RECORDING ================= -->
-        <section id="view-recording" class="view">
-          <div class="view-head">
-            <h2>Recording</h2>
-            <p class="view-desc">Do your actions in the recorded tab, then come back here to stop.</p>
-          </div>
-
-          <div class="rec-status">
-            <span class="dot" id="rec-dot"></span>
-            <span id="rec-label">Recording</span>
-          </div>
-          <div class="rec-sub" id="rec-scenario">Scenario</div>
-
-          <div class="metrics">
-            <div class="metric">
-              <div class="num" id="rec-timer">00:00</div>
-              <div class="lbl">Duration</div>
+            <div id="suites-list"></div>
+            <div class="empty" id="suites-empty" style="display: none">
+              <span class="empty-icon"
+                ><svg
+                  class="icon"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                  /></svg
+              ></span>
+              Belum ada suite — tambahkan satu untuk mulai.
             </div>
-            <div class="metric">
-              <div class="num" id="rec-count">0</div>
-              <div class="lbl">Steps</div>
-            </div>
-          </div>
 
-          <div class="row">
-            <button id="btn-pause" class="btn">⏸ Pause</button>
-            <button id="btn-stop" class="btn danger">■ Stop</button>
-          </div>
-        </section>
-
-        <!-- ================= SUITE HUB ================= -->
-        <section id="view-suite" class="view">
-          <div class="view-head">
-            <h2>Test suite</h2>
-            <p class="view-desc">Each scenario becomes one <code>it()</code>. Play a scenario to check it in the browser.</p>
-          </div>
-
-          <div class="suite-head">
-            <div class="suite-row"><span class="k">Suite</span><span class="v" id="suite-name">—</span></div>
-            <div class="suite-row"><span class="k">URL</span><span class="v mono" id="suite-url">—</span></div>
-          </div>
-
-          <div id="import-report" class="import-report" hidden></div>
-
-          <div class="list-head">
-            <strong>Scenarios</strong>
-            <button id="btn-add-scenario" class="btn sm">＋ Add scenario</button>
-          </div>
-          <div id="scenario-list"></div>
-          <div class="empty" id="scenario-empty" style="display:none;">
-            No scenarios yet — add one to start recording.
-          </div>
-
-          <div class="row wrap actions-primary">
-            <button id="btn-play-all" class="btn primary">▶ Play all in browser</button>
-            <button id="btn-generate" class="btn">⚙ Generate code</button>
-          </div>
-
-          <details class="section-more">
-            <summary>More ways to export &amp; import</summary>
-            <div class="row wrap">
-              <button id="btn-export-1" class="btn sm">⬇ Export ZIP</button>
-              <button id="btn-export-session" class="btn sm">⬇ Save session (.json)</button>
-              <button id="btn-import-2" class="btn sm">⬆ Import session</button>
+            <div class="row wrap actions-primary">
+              <button id="btn-export-suites" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" x2="12" y1="15" y2="3" />
+                </svg>
+                Ekspor semua suite
+              </button>
+              <button id="btn-import-suites" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" x2="12" y1="3" y2="15" />
+                </svg>
+                Impor suite
+              </button>
             </div>
             <p class="hint">
-              “Play in browser” replays the recording itself, so it works whichever framework is
-              selected. “Export ZIP” writes a ready-to-run project for that framework. “Save session”
-              writes a <code>.json</code> you can re-import later (also tucked inside the exported ZIP;
-              ZIP import reads Cypress projects).
+              Mengekspor semua suite tersimpan ke satu bundel
+              <code>.json</code>. Mengimpor sebuah bundel akan
+              <em>menambahkan</em> suite-nya ke library kamu — tidak pernah
+              menggantikan atau menghapus yang sudah ada.
             </p>
-          </details>
-        </section>
 
-        <!-- ================= SCENARIO EDITOR ================= -->
-        <section id="view-scenario" class="view">
-          <div class="view-head">
-            <h2>Edit scenario</h2>
-            <p class="view-desc">Tap a step to expand it. Reorder, tweak selectors, or add assertions.</p>
-          </div>
-
-          <label for="scenarioName">Scenario name</label>
-          <input type="text" id="scenarioName" placeholder="Admin dapat melihat User Page" />
-
-          <div class="list-head">
-            <strong>Steps <span class="count-badge" id="scenario-count">0</span></strong>
-            <span class="tool-group">
-              <button id="btn-record-more" class="btn sm">● Record more</button>
-              <button id="btn-add-assertion" class="btn sm">+ Assertion</button>
-            </span>
-          </div>
-
-          <div class="steps" id="steps-list"></div>
-          <div class="empty" id="steps-empty" style="display:none;">No steps in this scenario.</div>
-
-          <div class="row wrap actions-primary">
-            <button id="btn-play-scenario" class="btn primary">▶ Play in browser</button>
-            <button id="btn-save-scenario" class="btn">💾 Save scenario</button>
-            <button id="btn-scenario-back" class="btn ghost">← Back</button>
-          </div>
-        </section>
-
-        <!-- ================= PLAYBACK ================= -->
-        <section id="view-play" class="view">
-          <div class="view-head">
-            <h2 id="play-title">Playing in browser</h2>
-            <p class="view-desc" id="play-desc">Each step runs in the recorded tab and is highlighted as it happens.</p>
-          </div>
-
-          <div class="play-bar">
-            <div class="play-progress"><span id="play-progress-fill"></span></div>
-            <div class="play-meta">
-              <span id="play-count">0 / 0</span>
-              <span class="spacer"></span>
-              <span id="play-elapsed" class="muted"></span>
+            <div class="row wrap actions-primary">
+              <button id="btn-generate-all" class="btn primary full">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
+                </svg>
+                Generate kode — gabungan semua suite
+              </button>
             </div>
-          </div>
+            <p class="hint">
+              Menggabungkan semua suite tersimpan menjadi
+              <strong>satu project Cypress</strong>: satu file spec per suite,
+              dengan Page Object bersama saat dua suite menyentuh halaman yang
+              sama. Siap disalin atau diekspor sebagai satu repo.
+            </p>
+          </section>
 
-          <div id="play-summary" style="display:none;"></div>
+          <!-- ================= SETUP ================= -->
+          <section id="view-setup" class="view">
+            <div class="view-head">
+              <h2>Mulai Test Suite</h2>
+              <p class="view-desc">
+                Beri nama suite dan halaman yang ingin ditest. Perekaman akan
+                dibuka di tab baru.
+              </p>
+            </div>
 
-          <div class="steps" id="play-steps"></div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="projectName">Nama project</label>
+                <input
+                  type="text"
+                  id="projectName"
+                  placeholder="TIJE Dashboard"
+                />
+                <div class="hint">
+                  Kosongkan untuk memakai default "MyProject".
+                </div>
+              </div>
+              <div class="field">
+                <label for="suiteName">Nama suite test</label>
+                <input type="text" id="suiteName" placeholder="Login" />
+                <div class="hint">
+                  Menjadi <code>describe(...)</code> dan nama file spec.
+                  Kosongkan untuk memakai default "My Suite".
+                </div>
+                <div class="hint warn" id="suiteName-warning" hidden></div>
+              </div>
+            </div>
 
-          <div class="row wrap actions-primary">
-            <button id="btn-play-stop" class="btn danger">■ Stop</button>
-            <button id="btn-play-again" class="btn primary" style="display:none;">▶ Play again</button>
-            <button id="btn-play-back" class="btn ghost">← Back to suite</button>
-          </div>
-        </section>
+            <label for="targetUrl">URL Target</label>
+            <input
+              type="url"
+              id="targetUrl"
+              placeholder="https://example.com/login"
+            />
 
-        <!-- ================= CODE PREVIEW ================= -->
-        <section id="view-code" class="view">
-          <div class="view-head">
-            <h2 id="code-title">Generated code</h2>
-            <p class="view-desc">Page Object Model: Locator → Page → Spec, plus Messages &amp; Data.</p>
-          </div>
+            <div class="error" id="setup-error"></div>
 
-          <div class="tabs" id="code-tabs">
-            <div class="tab active" data-tab="spec">Spec</div>
-            <div class="tab" data-tab="page">Pages</div>
-            <div class="tab" data-tab="locator">Locators</div>
-            <div class="tab" data-tab="message">Messages</div>
-            <div class="tab" data-tab="data">Data</div>
-            <div class="tab" data-tab="structure">Structure</div>
-          </div>
+            <div class="row">
+              <button id="btn-start" class="btn primary lg">
+                <svg
+                  class="icon"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="none"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                </svg>
+                Mulai rekam — Scenario 1
+              </button>
+            </div>
+            <div class="row">
+              <button id="btn-import" class="btn sm ghost">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" x2="12" y1="3" y2="15" />
+                </svg>
+                Impor sesi tersimpan (.json / .zip)
+              </button>
+            </div>
+            <div id="spec-picker" class="import-report" hidden></div>
+          </section>
 
-          <div class="filepick" id="filepick"></div>
-          <pre class="code" id="code-out">// Generate first</pre>
+          <!-- ================= RECORDING ================= -->
+          <section id="view-recording" class="view">
+            <div class="view-head">
+              <h2>Merekam</h2>
+              <p class="view-desc">
+                Lakukan aksi di tab yang direkam, lalu kembali ke sini untuk
+                berhenti.
+              </p>
+            </div>
 
-          <div class="row wrap">
-            <button id="btn-copy" class="btn sm">⧉ Copy</button>
-            <button id="btn-play-2" class="btn sm primary">▶ Play</button>
-            <button id="btn-export-2" class="btn sm">⬇ Export</button>
-            <button id="btn-code-back" class="btn sm ghost">← Back</button>
-          </div>
-        </section>
-      </main>
+            <div class="banner warn" id="iframe-banner" hidden>
+              <svg
+                class="icon"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+                />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+              Halaman ini punya iframe — elemen di dalamnya mungkin tidak bisa
+              direkam atau diputar ulang.
+            </div>
+
+            <div class="rec-status">
+              <span class="dot" id="rec-dot"></span>
+              <span id="rec-label">Merekam</span>
+            </div>
+            <div class="rec-sub" id="rec-scenario">Scenario</div>
+
+            <div class="metrics">
+              <div class="metric">
+                <div class="num" id="rec-timer">00:00</div>
+                <div class="lbl">Durasi</div>
+              </div>
+              <div class="metric">
+                <div class="num" id="rec-count">0</div>
+                <div class="lbl">Langkah</div>
+              </div>
+            </div>
+
+            <div class="row">
+              <button id="btn-pause" class="btn">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                </svg>
+                Jeda
+              </button>
+              <button id="btn-stop" class="btn danger">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                </svg>
+                Berhenti
+              </button>
+            </div>
+          </section>
+
+          <!-- ================= SUITE HUB ================= -->
+          <section id="view-suite" class="view">
+            <div class="view-head">
+              <h2>Test Suite</h2>
+              <p class="view-desc">
+                Setiap scenario menjadi satu <code>it()</code>. Jalankan
+                scenario untuk mengeceknya di browser.
+              </p>
+            </div>
+
+            <div class="suite-head">
+              <div class="suite-row">
+                <span class="k">Suite</span
+                ><span class="v" id="suite-name">—</span>
+              </div>
+              <div class="suite-row">
+                <span class="k">URL</span
+                ><span class="v mono" id="suite-url">—</span>
+              </div>
+            </div>
+
+            <div id="import-report" class="import-report" hidden></div>
+
+            <div class="list-head">
+              <strong>Scenario</strong>
+              <button id="btn-add-scenario" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 12h14" />
+                  <path d="M12 5v14" />
+                </svg>
+                Add scenario
+              </button>
+            </div>
+            <div id="scenario-list"></div>
+            <div class="empty" id="scenario-empty" style="display: none">
+              <span class="empty-icon"
+                ><svg
+                  class="icon"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect
+                    x="2"
+                    y="2"
+                    width="20"
+                    height="20"
+                    rx="2.18"
+                    ry="2.18"
+                  />
+                  <line x1="7" x2="7" y1="2" y2="22" />
+                  <line x1="17" x2="17" y1="2" y2="22" />
+                  <line x1="2" x2="22" y1="12" y2="12" />
+                  <line x1="2" x2="7" y1="7" y2="7" />
+                  <line x1="2" x2="7" y1="17" y2="17" />
+                  <line x1="17" x2="22" y1="17" y2="17" />
+                  <line x1="17" x2="22" y1="7" y2="7" /></svg
+              ></span>
+              Belum ada scenario — tambahkan satu untuk mulai merekam.
+            </div>
+
+            <div class="row wrap actions-primary">
+              <button id="btn-play-all" class="btn primary">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polygon points="6 3 20 12 6 21 6 3" />
+                </svg>
+                Run all in browser
+              </button>
+              <button id="btn-generate" class="btn">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
+                </svg>
+                Generate kode
+              </button>
+            </div>
+
+            <details class="section-more">
+              <summary>Other ways to export &amp; import</summary>
+              <div class="row wrap">
+                <button id="btn-export-1" class="btn sm">
+                  <svg
+                    class="icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" x2="12" y1="15" y2="3" />
+                  </svg>
+                  Export ZIP
+                </button>
+                <button id="btn-export-session" class="btn sm">
+                  <svg
+                    class="icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" x2="12" y1="15" y2="3" />
+                  </svg>
+                  Save session (.json)
+                </button>
+                <button id="btn-import-2" class="btn sm">
+                  <svg
+                    class="icon"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" x2="12" y1="3" y2="15" />
+                  </svg>
+                  Import session
+                </button>
+              </div>
+            </details>
+          </section>
+
+          <!-- ================= SCENARIO EDITOR ================= -->
+          <section id="view-scenario" class="view">
+            <div class="view-head">
+              <h2>Edit scenario</h2>
+              <p class="view-desc">
+                Ketuk sebuah step untuk membukanya. Urutkan ulang, sesuaikan
+                selector, atau tambah assertion.
+              </p>
+            </div>
+
+            <div class="banner warn" id="selector-warning-banner" hidden></div>
+
+            <label for="scenarioName">Scenario name</label>
+            <input
+              type="text"
+              id="scenarioName"
+              placeholder="Admin dapat melihat User Page"
+            />
+            <div class="hint warn" id="scenarioName-warning" hidden></div>
+
+            <div class="list-head">
+              <strong
+                >Steps
+                <span class="count-badge" id="scenario-count">0</span></strong
+              >
+              <span class="tool-group">
+                <button id="btn-record-more" class="btn sm">
+                  <svg
+                    class="icon"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    stroke="none"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="9" />
+                  </svg>
+                  Record again
+                </button>
+                <button id="btn-add-assertion" class="btn sm">
+                  + Assertion
+                </button>
+              </span>
+            </div>
+
+            <div class="steps" id="steps-list"></div>
+            <div class="empty" id="steps-empty" style="display: none">
+              <span class="empty-icon"
+                ><svg
+                  class="icon"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M14 4.1 12 6" />
+                  <path d="m5.1 8-2.9-.8" />
+                  <path d="m6 12-1.9 2" />
+                  <path d="M7.2 2.2 8 5.1" />
+                  <path
+                    d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"
+                  /></svg
+              ></span>
+              Belum ada step di scenario ini.
+            </div>
+
+            <div class="row wrap actions-primary">
+              <button id="btn-play-scenario" class="btn primary">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polygon points="6 3 20 12 6 21 6 3" />
+                </svg>
+                Run in browser
+              </button>
+              <button id="btn-save-scenario" class="btn">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+                  />
+                  <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
+                  <path d="M7 3v4a1 1 0 0 0 1 1h7" />
+                </svg>
+                Save scenario
+              </button>
+              <button id="btn-scenario-back" class="btn ghost">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m12 19-7-7 7-7" />
+                  <path d="M19 12H5" />
+                </svg>
+                Back
+              </button>
+            </div>
+          </section>
+
+          <!-- ================= PLAYBACK ================= -->
+          <section id="view-play" class="view">
+            <div class="view-head">
+              <h2 id="play-title">Menjalankan di browser</h2>
+              <p class="view-desc" id="play-desc">
+                Setiap step dijalankan di tab yang direkam dan disorot saat
+                berjalan.
+              </p>
+            </div>
+
+            <div class="play-bar">
+              <div class="play-progress">
+                <span id="play-progress-fill"></span>
+              </div>
+              <div class="play-meta">
+                <span id="play-count">0 / 0</span>
+                <span class="spacer"></span>
+                <span id="play-elapsed" class="muted"></span>
+              </div>
+            </div>
+
+            <div id="play-summary" style="display: none"></div>
+
+            <div class="steps" id="play-steps"></div>
+
+            <div class="row wrap actions-primary">
+              <button id="btn-play-stop" class="btn danger">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                </svg>
+                Berhenti
+              </button>
+              <button
+                id="btn-play-again"
+                class="btn primary"
+                style="display: none"
+              >
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polygon points="6 3 20 12 6 21 6 3" />
+                </svg>
+                Jalankan lagi
+              </button>
+              <button id="btn-play-back" class="btn ghost">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m12 19-7-7 7-7" />
+                  <path d="M19 12H5" />
+                </svg>
+                Kembali ke suite
+              </button>
+            </div>
+          </section>
+
+          <!-- ================= CODE PREVIEW ================= -->
+          <section id="view-code" class="view">
+            <div class="view-head">
+              <h2 id="code-title">Kode hasil generate</h2>
+              <p class="view-desc">
+                Page Object Model: Locator → Page → Spec, plus Messages &amp;
+                Data.
+              </p>
+            </div>
+
+            <div class="tabs" id="code-tabs">
+              <div class="tab active" data-tab="spec">Spec</div>
+              <div class="tab" data-tab="page">Pages</div>
+              <div class="tab" data-tab="locator">Locators</div>
+              <div class="tab" data-tab="message">Messages</div>
+              <div class="tab" data-tab="data">Data</div>
+              <div class="tab" data-tab="structure">Structure</div>
+            </div>
+
+            <div class="filepick" id="filepick"></div>
+            <pre class="code" id="code-out">// Generate first</pre>
+
+            <div class="row wrap">
+              <button id="btn-copy" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                  <path
+                    d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+                  />
+                </svg>
+                Copy
+              </button>
+              <button id="btn-play-2" class="btn sm primary">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polygon points="6 3 20 12 6 21 6 3" />
+                </svg>
+                Run
+              </button>
+              <button id="btn-export-2" class="btn sm">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" x2="12" y1="15" y2="3" />
+                </svg>
+                Export
+              </button>
+              <button id="btn-code-back" class="btn sm ghost">
+                <svg
+                  class="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m12 19-7-7 7-7" />
+                  <path d="M19 12H5" />
+                </svg>
+                Back
+              </button>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
-  </div>
 
-  <script src="../lib/gen-core.js"></script>
-  <script src="../lib/gen-cypress.js"></script>
-  <script src="../lib/gen-playwright.js"></script>
-  <script src="../lib/gen-wdio.js"></script>
-  <script src="../lib/generator.js"></script>
-  <script src="../lib/zip.js"></script>
-  <script src="../lib/importer.js"></script>
-  <script src="popup.js"></script>
-</body>
+    <script src="../lib/gen-core.js"></script>
+    <script src="../lib/gen-cypress.js"></script>
+    <script src="../lib/gen-playwright.js"></script>
+    <script src="../lib/gen-wdio.js"></script>
+    <script src="../lib/gen-selenium.js"></script>
+    <script src="../lib/generator.js"></script>
+    <script src="../lib/zip.js"></script>
+    <script src="../lib/importer.js"></script>
+    <script src="popup.js"></script>
+  </body>
 </html>

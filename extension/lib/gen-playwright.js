@@ -75,6 +75,12 @@
           line(`await expect(${loc}).toBeVisible();`),
           line(`await expect(${loc}).toContainText(${page.messageConst}.${op.msgKey});`),
         ];
+      case "assertPageText":
+        return [
+          line(
+            `await expect(this.page.locator("body")).toContainText(${page.messageConst}.${op.msgKey});`,
+          ),
+        ];
       case "assertValue":
         return [line(`await expect(${loc}).toHaveValue(${p});`)];
       case "assertExists":
@@ -188,17 +194,17 @@ ${rows.join("\n") || "  //"}
   }
 
   function renderData(page) {
-    const rows = Object.keys(page.data).map(
-      (k) => `  ${k}: ${dq(page.data[k])},`,
-    );
-    return `export const ${page.dataConst} = {
+    const rows = C.dataRows(page);
+    return `${C.secretHelper(page, "node")}export const ${page.dataConst} = {
 ${rows.join("\n") || "  //"}
 };
 `;
   }
 
   function renderPage(page) {
-    const usesMessage = page.methods.some((m) => m.op.t === "assertText");
+    const usesMessage = page.methods.some((m) =>
+      ["assertText", "assertPageText"].includes(m.op.t),
+    );
     const usesExpect = page.methods.some((m) => m.op.t.startsWith("assert"));
 
     const imports = [];
@@ -410,8 +416,8 @@ export default class TimingReporter {
 `;
   }
 
-  function renderConfig(model) {
-    return `import { defineConfig, devices } from "@playwright/test";
+  function renderConfig(model, useEnv) {
+    return `${useEnv ? '// Loads .env, where the credentials the tests need live (see .env.example).\nimport "dotenv/config";\n' : ""}import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
@@ -440,7 +446,7 @@ export default defineConfig({
 `;
   }
 
-  function renderPackageJson(model) {
+  function renderPackageJson(model, useEnv) {
     return (
       JSON.stringify(
         {
@@ -456,12 +462,34 @@ export default defineConfig({
             "test:ui": "playwright test --ui",
             report: "playwright show-report",
           },
-          devDependencies: { "@playwright/test": "^1.50.0" },
+          devDependencies: {
+            "@playwright/test": "^1.50.0",
+            ...(useEnv ? { dotenv: "^16.4.5" } : {}),
+          },
         },
         null,
         2,
       ) + "\n"
     );
+  }
+
+  const SECRETS_HOW =
+    "Copy `.env.example` to `.env` (git-ignored) and fill in the values. " +
+    "In CI, set them as (secret) environment variables instead — `playwright.config.js` loads `.env` through `dotenv` and leaves anything already set alone.";
+
+  const GITIGNORE = `node_modules/
+test-results/
+playwright-report/
+.env
+`;
+
+  // Files that only exist when the recording typed a password: the names of
+  // the variables to fill in (never their values) and the ignore rules that
+  // keep the real ones out of git.
+  function secretFiles(pages, files) {
+    if (!C.secretsOf(pages).length) return;
+    files[".env.example"] = C.envExample(pages);
+    files[".gitignore"] = GITIGNORE;
   }
 
   const LAYOUT = `| Folder | Contents |
@@ -495,7 +523,7 @@ npx playwright test --ui
 ## Layout
 
 ${LAYOUT}
-${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `" + model.loginName + "(page)` in `support/auth.js` and run in `test.beforeEach`.\n" : ""}
+${model.hasLogin ? "\n> The shared opening steps of every scenario were extracted into `" + model.loginName + "(page)` in `support/auth.js` and run in `test.beforeEach`.\n" : ""}${C.secretsReadme(model.pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 ${ANTIFLAKE}
@@ -508,7 +536,7 @@ Next steps:
 `;
   }
 
-  function renderProjectReadme(suiteModels, projectName, baseUrl) {
+  function renderProjectReadme(suiteModels, projectName, baseUrl, pages) {
     const warn = originWarning(suiteModels, baseUrl, "playwright.config.js");
     const rows = suiteModels
       .map((m) => {
@@ -539,7 +567,7 @@ ${rows}
 ${LAYOUT}
 
 Page Objects are shared automatically when two suites touch the same page.
-
+${C.secretsReadme(pages, SECRETS_HOW)}
 ## Anti-flake measures baked in
 
 ${ANTIFLAKE}
@@ -572,9 +600,11 @@ ${ANTIFLAKE}
     const auth = renderAuth([model]);
     if (auth) files["support/auth.js"] = auth;
     files["support/timing-reporter.js"] = renderTimingReporter();
-    files["playwright.config.js"] = renderConfig(model);
-    files["package.json"] = renderPackageJson(model);
+    const useEnv = C.secretsOf(model.pages).length > 0;
+    files["playwright.config.js"] = renderConfig(model, useEnv);
+    files["package.json"] = renderPackageJson(model, useEnv);
     files["README.md"] = renderReadme(model);
+    secretFiles(model.pages, files);
 
     return { model, files };
   }
@@ -594,9 +624,11 @@ ${ANTIFLAKE}
     const auth = renderAuth(suiteModels);
     if (auth) files["support/auth.js"] = auth;
     files["support/timing-reporter.js"] = renderTimingReporter();
-    files["playwright.config.js"] = renderConfig({ baseUrl });
-    files["package.json"] = renderPackageJson({ suiteName: projectName });
-    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl);
+    const useEnv = C.secretsOf(pages).length > 0;
+    files["playwright.config.js"] = renderConfig({ baseUrl }, useEnv);
+    files["package.json"] = renderPackageJson({ suiteName: projectName }, useEnv);
+    files["README.md"] = renderProjectReadme(suiteModels, projectName, baseUrl, pages);
+    secretFiles(pages, files);
 
     return { suiteModels, baseUrl, projectName, files };
   }

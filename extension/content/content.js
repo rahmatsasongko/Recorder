@@ -7,6 +7,7 @@
   window.__cypressRecorderInjected = true;
 
   let recording = false;
+  let assertMode = false;
   const focusValues = new WeakMap();
 
   /* ---------------------------------------------------------------------- *
@@ -366,6 +367,9 @@
    * ---------------------------------------------------------------------- */
 
   function sendStep(step) {
+    // A scroll is only sent once it settles (see onScroll). If the user acts
+    // before that, send it first so the steps keep the order things happened.
+    if (scrollTimer && step.action !== "scroll") flushScroll();
     try {
       chrome.runtime.sendMessage({ type: "ADD_STEP", step }, () => void chrome.runtime.lastError);
     } catch (e) {
@@ -373,9 +377,26 @@
     }
   }
 
+  // A field whose value must not end up in generated code or on screen.
+  // type=password is the obvious case. A "show password" toggle flips the
+  // type to text, so also go by autocomplete and by how the field is named —
+  // deliberately not a bare "pass", which would also match "passport".
+  const SECRET_HINT = /pass(word|wd|code|phrase)|pwd|sandi/i;
+  const NON_TEXT_INPUT = ["checkbox", "radio", "button", "submit", "reset", "image", "file", "hidden", "range", "color"];
+  function isSensitiveField(el) {
+    if (!el || el.tagName !== "INPUT") return false;
+    const type = (el.type || "text").toLowerCase();
+    if (type === "password") return true;
+    if (NON_TEXT_INPUT.includes(type)) return false;
+    if (/(^|\s)(current|new)-password(\s|$)/i.test(el.getAttribute("autocomplete") || "")) return true;
+    return SECRET_HINT.test(
+      [el.name, el.id, el.getAttribute("aria-label"), el.getAttribute("placeholder")].filter(Boolean).join(" ")
+    );
+  }
+
   function describe(el) {
     const { selector, type, stable } = buildSelector(el);
-    return {
+    const info = {
       selector,
       selectorType: type,
       selectorStable: stable,
@@ -384,6 +405,9 @@
       inputType: el.type || null,
       url: location.href
     };
+    // Only ever set to true, so ordinary steps stay as small as before.
+    if (isSensitiveField(el)) info.sensitive = true;
+    return info;
   }
 
   function isEditable(el) {
@@ -413,7 +437,22 @@
     "[role=tab],[role=menuitem],[onclick]";
 
   function onClick(e) {
+    if (isOverlayTarget(e.target)) return;
     if (!recording) return;
+
+    // Assertion picker: swallow the click entirely (no navigation, no side
+    // effects from the page's own handlers) and record what was clicked as
+    // an assertion instead of a normal interaction. Stays on until the user
+    // toggles the overlay button off again, so several elements can be
+    // picked in a row.
+    if (assertMode) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      captureAssertion(e.target);
+      return;
+    }
+
     if (Date.now() - lastDragAt < 400) return; // tail of a drag / resize / drop
 
     const raw = e.target;
@@ -432,14 +471,117 @@
     // Prefer the nearest genuinely interactive ancestor.
     let el = raw.closest(INTERACTIVE);
 
-    // Otherwise accept the clicked element only if it looks clickable.
-    if (!el) {
+    // Otherwise accept the clicked element only if it looks clickable — but
+    // not a bare calendar cell inside a date-picker popup (bootstrap-
+    // datepicker, jQuery UI datepicker, ...). Those get cursor:pointer from
+    // the widget's own :hover CSS, yet have no selector that survives a
+    // replay: the popup has to already be open on the right month/year for
+    // the cell to exist, and its cells are unlabeled numbers repeated every
+    // month. The date it sets is already captured as a `type` step by the
+    // focusout fallback below, so recording the cell click too would only
+    // add a step that can't replay.
+    const inDatePicker =
+      !el &&
+      raw &&
+      raw.closest &&
+      raw.closest(".datepicker, .ui-datepicker, .flatpickr-calendar, .react-datepicker, .mat-calendar");
+    if (!el && !inDatePicker) {
       const cursor = raw && getComputedStyle(raw).cursor;
       if (raw && (cursor === "pointer" || raw.hasAttribute("tabindex"))) el = raw;
     }
     if (!el || isFormField(el)) return;
 
     sendStep({ action: "click", value: null, ...describe(el) });
+  }
+
+  // If the exact element under the cursor already carries its own visible
+  // text (a <p>, <h2>, <span>, ...), trust it directly — that is what lets
+  // `<p class="text-xs">Super Admin</p>` assert on exactly "Super Admin"
+  // instead of climbing out to some larger clickable wrapper (a card, a
+  // profile-menu button) it happens to sit inside, which would grab far more
+  // text than the user pointed at. Only climb to the nearest interactive
+  // ancestor when the clicked spot itself has no text of its own — an icon,
+  // an empty toggle — so that still resolves to the whole control.
+  function resolveAssertTarget(raw) {
+    if (raw && raw.nodeType === 1 && normText(raw)) return raw;
+    return (raw && raw.closest && raw.closest(INTERACTIVE)) || raw;
+  }
+
+  // Any text/button/whatever the user picks while assert mode is on — plain
+  // text is a valid assertion target, unlike a normal click step.
+  function captureAssertion(raw) {
+    const el = resolveAssertTarget(raw);
+    const text = normText(el);
+    const assertion =
+      text && text.length <= 160 ? { type: "contain", value: text } : { type: "visible", value: "" };
+    const info = describe(el);
+    sendStep({ action: "assert", value: null, assertion, ...info });
+    flashAssertToast(text || info.elementName);
+  }
+
+  /* ---- hover box: a single highlight rect that tracks whatever element
+   * resolveAssertTarget() would pick, instead of CSS :hover (which lights up
+   * every ancestor of the cursor at once). ---- */
+  let hoverBoxEl = null;
+  let hoverTargetEl = null;
+
+  function ensureHoverBox() {
+    if (hoverBoxEl && document.documentElement.contains(hoverBoxEl)) return hoverBoxEl;
+    const box = document.createElement("div");
+    box.id = "cyp-rec-hoverbox";
+    box.style.cssText =
+      "all:initial;position:fixed;z-index:2147483646;pointer-events:none;" +
+      "border:2px solid #10b981;background:rgba(16,185,129,.15);border-radius:3px;" +
+      "box-sizing:border-box;display:none;";
+    document.documentElement.appendChild(box);
+    hoverBoxEl = box;
+    return box;
+  }
+
+  function positionHoverBox() {
+    const box = hoverBoxEl;
+    if (!box || !hoverTargetEl || !hoverTargetEl.isConnected) {
+      if (box) box.style.display = "none";
+      return;
+    }
+    const r = hoverTargetEl.getBoundingClientRect();
+    box.style.display = "block";
+    box.style.left = r.left + "px";
+    box.style.top = r.top + "px";
+    box.style.width = r.width + "px";
+    box.style.height = r.height + "px";
+  }
+
+  function hideHoverBox() {
+    hoverTargetEl = null;
+    if (hoverBoxEl) hoverBoxEl.style.display = "none";
+  }
+
+  function onAssertHover(e) {
+    if (!assertMode) return;
+    if (isOverlayTarget(e.target)) {
+      hideHoverBox();
+      return;
+    }
+    hoverTargetEl = resolveAssertTarget(e.target);
+    ensureHoverBox();
+    positionHoverBox();
+  }
+
+  function flashAssertToast(label) {
+    const t = document.createElement("div");
+    t.style.cssText =
+      "all:initial;position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:2147483647;" +
+      "background:#10b981;color:#fff;padding:6px 14px;border-radius:999px;max-width:70vw;" +
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+      "font:600 12px/1 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
+      "box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:none;transition:opacity .3s;";
+    t.textContent = "✓ Assertion ditambahkan: " + label;
+    (document.body || document.documentElement).appendChild(t);
+    setTimeout(() => {
+      t.style.opacity = "0";
+    }, 700);
+    setTimeout(() => t.remove(), 1000);
   }
 
   function onFocusIn(e) {
@@ -491,6 +633,11 @@
       const newVal = el.value ?? el.textContent ?? "";
       const oldVal = focusValues.get(el) ?? "";
 
+      // Whatever we do below, this value is now accounted for — keeps the
+      // focusout fallback below from re-sending the same edit as a second
+      // step once focus actually leaves the field.
+      focusValues.set(el, newVal);
+
       if (newVal === "" && oldVal !== "") {
         sendStep({ action: "clear", value: null, ...describe(el) });
         return;
@@ -503,6 +650,33 @@
         ...describe(el)
       });
     }
+  }
+
+  // Fallback for widgets (date pickers, typeaheads, ...) that set an
+  // editable field's value through their own JS/jQuery API and only fire a
+  // library-internal event for it — never a real DOM "change"/"input" that
+  // `onChange` above listens for. A native `focusout` always fires when the
+  // field loses focus no matter how its value got there, so diffing against
+  // the value seen on focus-in catches the edit `onChange` missed. Example:
+  // clicking a day in a bootstrap-datepicker calendar sets `.value` via
+  // jQuery and calls jQuery's `.trigger("change")`, which (on the jQuery
+  // versions these apps ship) never reaches a native `addEventListener`
+  // listener, so nothing would otherwise get recorded for "pick a date".
+  function onFocusOut(e) {
+    if (!recording) return;
+    const el = e.target;
+    if (!isEditable(el) || !focusValues.has(el)) return;
+
+    const newVal = el.value ?? el.textContent ?? "";
+    const oldVal = focusValues.get(el);
+    focusValues.delete(el);
+    if (newVal === oldVal) return;
+
+    if (newVal === "" && oldVal !== "") {
+      sendStep({ action: "clear", value: null, ...describe(el) });
+      return;
+    }
+    sendStep({ action: "type", value: newVal, ...describe(el) });
   }
 
   const SPECIAL_KEYS = {
@@ -619,6 +793,7 @@
   let lastDragAt = 0;
 
   function onMouseDown(e) {
+    if (isOverlayTarget(e.target)) return;
     if (!recording || e.button !== 0) return;
     const el = e.target;
 
@@ -644,6 +819,7 @@
   }
 
   function onMouseUp(e) {
+    if (isOverlayTarget(e.target)) return;
     if (!recording || !dragStart) return;
     const start = dragStart;
     dragStart = null;
@@ -729,15 +905,38 @@
     });
   }
 
-  let lastScroll = 0;
-  function onScroll() {
+  // Only the PAGE scrolling is a step — replay does window.scrollTo(x, y). The
+  // listener below is a capture listener on window, so it also hears every
+  // scrollable <div>, <textarea> and dropdown list on the page; each of those
+  // used to be recorded as a window scroll to wherever the window happened to
+  // be. It is also recorded once scrolling SETTLES, at the position it
+  // settled on: the first event of a burst fires a few pixels from where the
+  // scroll began, which is not where a replay needs to go.
+  const SCROLL_SETTLE_MS = 400;
+  const SCROLL_MIN_DELTA = 40; // px — a nudge is not worth a step
+  let scrollTimer = null;
+  let lastScrollX = 0;
+  let lastScrollY = 0;
+
+  function resetScrollBaseline() {
+    clearTimeout(scrollTimer);
+    scrollTimer = null;
+    lastScrollX = Math.round(window.scrollX);
+    lastScrollY = Math.round(window.scrollY);
+  }
+
+  function flushScroll() {
+    clearTimeout(scrollTimer);
+    scrollTimer = null;
     if (!recording) return;
-    const now = Date.now();
-    if (now - lastScroll < 800) return;
-    lastScroll = now;
+    const x = Math.round(window.scrollX);
+    const y = Math.round(window.scrollY);
+    if (Math.abs(x - lastScrollX) < SCROLL_MIN_DELTA && Math.abs(y - lastScrollY) < SCROLL_MIN_DELTA) return;
+    lastScrollX = x;
+    lastScrollY = y;
     sendStep({
       action: "scroll",
-      value: `${Math.round(window.scrollX)},${Math.round(window.scrollY)}`,
+      value: `${x},${y}`,
       selector: null,
       selectorType: null,
       elementName: "window",
@@ -745,7 +944,16 @@
     });
   }
 
+  function onScroll(e) {
+    if (!recording) return;
+    if (e.target !== document) return; // an element inside the page, not the page
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(flushScroll, SCROLL_SETTLE_MS);
+  }
+
   function recordVisit() {
+    // A new page (or route) starts from wherever the window is now.
+    resetScrollBaseline();
     sendStep({
       action: "visit",
       value: null,
@@ -766,39 +974,247 @@
   // step. We never want a standalone `submit` step from recording.
   document.addEventListener("click", onClick, true);
   document.addEventListener("focusin", onFocusIn, true);
+  document.addEventListener("focusout", onFocusOut, true);
   document.addEventListener("change", onChange, true);
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("mousedown", onMouseDown, true);
   document.addEventListener("mouseup", onMouseUp, true);
+  document.addEventListener("mousemove", onAssertHover, true);
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (assertMode) positionHoverBox();
+    },
+    true
+  );
   document.addEventListener("dragstart", onDragStart, true);
   document.addEventListener("drop", onHtml5Drop, true);
   window.addEventListener("scroll", onScroll, true);
 
-  // SPA navigation
-  const _push = history.pushState;
-  history.pushState = function () {
-    _push.apply(this, arguments);
+  // SPA navigation. A page's own history.pushState / replaceState calls run in
+  // the PAGE's JS world, and a content script's copy of `history` is a
+  // different object — patching it here never saw them. content/page-hook.js
+  // (a "world": "MAIN" content script) patches the real one and raises this
+  // event. popstate (back / forward) is a DOM event, so it reaches us as is.
+  window.addEventListener("cyp:navigate", () => {
     if (recording) setTimeout(recordVisit, 50);
-  };
+  });
   window.addEventListener("popstate", () => {
     if (recording) setTimeout(recordVisit, 50);
   });
+
+  /* ---------------------------------------------------------------------- *
+   * Recording overlay — Chrome closes the popup the instant this tab gets
+   * focus, which is exactly what happens the moment the user does the thing
+   * they're recording. Without an on-page control, the only way to check
+   * step count or hit Pause/Stop mid-recording is to reopen the popup. This
+   * floating pill mirrors that status directly on the page, and forwards
+   * Pause/Resume/Stop to the same background messages the popup itself uses.
+   * ---------------------------------------------------------------------- */
+
+  const OVERLAY_ID = "cyp-rec-overlay";
+  let overlayEl = null;
+  let overlayPollTimer = null;
+  let overlayPaused = false;
+
+  function isOverlayTarget(t) {
+    return !!(t && t.closest && t.closest("#" + OVERLAY_ID));
+  }
+
+  function fmtOverlayTime(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  function overlayElapsed(session) {
+    if (!session.startTime) return 0;
+    const base = session.startTime + (session.pausedAccum || 0);
+    if (session.paused && session.pausedAt) return session.pausedAt - base;
+    return Date.now() - base;
+  }
+
+  const OVERLAY_ICON_PAUSE =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="14" y="4" width="4" height="16" rx="1"></rect><rect x="6" y="4" width="4" height="16" rx="1"></rect></svg>';
+  const OVERLAY_ICON_PLAY =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+  const OVERLAY_ICON_STOP =
+    '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>';
+  const OVERLAY_ICON_ASSERT =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m9 12 2 2 4-4"></path></svg>';
+
+  function overlayBtnStyle(bg) {
+    return (
+      "all:unset;display:inline-flex;align-items:center;gap:5px;cursor:pointer;" +
+      "padding:5px 10px;border-radius:999px;font:600 11.5px/1 inherit;color:#fff;" +
+      "background:" + (bg || "rgba(255,255,255,.14)") + ";"
+    );
+  }
+
+  function ensureOverlay() {
+    if (overlayEl && document.documentElement.contains(overlayEl)) return overlayEl;
+    if (!document.getElementById("cyp-rec-overlay-style")) {
+      const style = document.createElement("style");
+      style.id = "cyp-rec-overlay-style";
+      style.textContent =
+        "@keyframes cyp-rec-pulse{0%,100%{opacity:1}50%{opacity:.25}}" +
+        "#" + OVERLAY_ID + " button:hover{filter:brightness(1.2);}" +
+        "html.cyp-assert-mode,html.cyp-assert-mode *{cursor:crosshair !important;}" +
+        "html.cyp-assert-mode #" + OVERLAY_ID + ",html.cyp-assert-mode #" + OVERLAY_ID + " *{cursor:pointer !important;}";
+      document.documentElement.appendChild(style);
+    }
+    const el = document.createElement("div");
+    el.id = OVERLAY_ID;
+    el.style.cssText =
+      "all:initial;position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:2147483647;" +
+      "display:flex;align-items:center;gap:10px;padding:8px 12px;" +
+      "background:#111827;color:#f3f4f6;border-radius:999px;" +
+      "font:600 12px/1 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
+      "box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:auto;";
+    el.innerHTML =
+      '<span data-role="dot" style="width:9px;height:9px;border-radius:50%;background:#ef4444;flex:0 0 auto;animation:cyp-rec-pulse 1.1s infinite;"></span>' +
+      '<span data-role="timer" style="font-variant-numeric:tabular-nums;color:#f3f4f6;">00:00</span>' +
+      '<span style="width:1px;height:14px;background:rgba(255,255,255,.2);"></span>' +
+      '<span data-role="steps" style="color:#d1d5db;white-space:nowrap;">0 langkah</span>' +
+      '<button data-role="pause" type="button" style="' + overlayBtnStyle() + '">' + OVERLAY_ICON_PAUSE + " Jeda</button>" +
+      '<button data-role="stop" type="button" style="' + overlayBtnStyle("#ef4444") + '">' + OVERLAY_ICON_STOP + " Berhenti</button>" +
+      '<button data-role="assert" type="button" style="' + overlayBtnStyle("#7c3aed") + '">' + OVERLAY_ICON_ASSERT + " Assert</button>";
+    el.querySelector('[data-role="assert"]').addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setAssertMode(!assertMode);
+    });
+    el.querySelector('[data-role="pause"]').addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.runtime.sendMessage(
+        { type: overlayPaused ? "RESUME" : "PAUSE" },
+        () => void chrome.runtime.lastError
+      );
+    });
+    el.querySelector('[data-role="stop"]').addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.runtime.sendMessage({ type: "STOP" }, () => void chrome.runtime.lastError);
+    });
+    (document.body || document.documentElement).appendChild(el);
+    overlayEl = el;
+    return el;
+  }
+
+  // Toggles the element picker: crosshair cursor everywhere (via the
+  // html.cyp-assert-mode rule above), the tracking hover box, and the
+  // overlay button's own on/off look.
+  function setAssertMode(on) {
+    assertMode = on;
+    document.documentElement.classList.toggle("cyp-assert-mode", assertMode);
+    if (!assertMode) hideHoverBox();
+    const btn = overlayEl && overlayEl.querySelector('[data-role="assert"]');
+    if (!btn) return;
+    btn.style.cssText = overlayBtnStyle(assertMode ? "#10b981" : "#7c3aed");
+    btn.innerHTML = OVERLAY_ICON_ASSERT + (assertMode ? " Klik elemen…" : " Assert");
+  }
+
+  function removeOverlay() {
+    if (overlayPollTimer) clearInterval(overlayPollTimer);
+    overlayPollTimer = null;
+    if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+    overlayEl = null;
+    setAssertMode(false);
+  }
+
+  function refreshOverlay() {
+    // GET_STATE (not a direct storage read) because `session` in storage is
+    // global — a page open in ANY tab would otherwise show the overlay for a
+    // recording actually happening in a different tab. Background's
+    // `isThisTab` is the only place that distinction is computed correctly.
+    try {
+      // OVERLAY_STATE, not GET_STATE: this runs twice a second, and GET_STATE
+      // answers with every scenario and step of the session.
+      chrome.runtime.sendMessage({ type: "OVERLAY_STATE" }, (session) => {
+        if (chrome.runtime.lastError || !session || !session.active || !session.isThisTab) {
+          removeOverlay();
+          return;
+        }
+        const el = ensureOverlay();
+        overlayPaused = !!session.paused;
+        el.querySelector('[data-role="timer"]').textContent = fmtOverlayTime(overlayElapsed(session));
+        el.querySelector('[data-role="steps"]').textContent = session.stepCount + " langkah";
+        const dot = el.querySelector('[data-role="dot"]');
+        dot.style.animation = overlayPaused ? "none" : "cyp-rec-pulse 1.1s infinite";
+        dot.style.opacity = overlayPaused ? ".4" : "1";
+        el.querySelector('[data-role="pause"]').innerHTML = overlayPaused
+          ? OVERLAY_ICON_PLAY + " Lanjut"
+          : OVERLAY_ICON_PAUSE + " Jeda";
+      });
+    } catch (e) {
+      removeOverlay();
+    }
+  }
+
+  // Optimistic on every STATE_CHANGED / GET_STATE tick rather than only when
+  // `recording` flips true: a paused session is still active (session.active
+  // stays true) but broadcasts recording:false, so gating on that boolean
+  // alone would hide the overlay the moment the user paused.
+  function startOverlayPoll() {
+    if (overlayPollTimer) return;
+    refreshOverlay();
+    overlayPollTimer = setInterval(refreshOverlay, 500);
+  }
+
+  // Elements inside an <iframe> can't be recorded or replayed — content
+  // scripts only run in the top frame here (manifest all_frames:false) — so
+  // rather than let the user discover this reactively when playback fails,
+  // flag it once per recording pass as soon as we know we're recording.
+  let iframeChecked = false;
+  function checkIframes() {
+    if (iframeChecked) return;
+    // Run at document_start, before the DOM is parsed — wait for it so
+    // <iframe> elements actually exist to find.
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", checkIframes, { once: true });
+      return;
+    }
+    iframeChecked = true;
+    if (document.querySelectorAll("iframe").length > 0) {
+      try {
+        chrome.runtime.sendMessage({ type: "IFRAME_WARNING" }, () => void chrome.runtime.lastError);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "STATE_CHANGED") {
       const was = recording;
       recording = !!msg.recording;
-      if (recording && !was) recordVisit();
+      if (recording && !was) {
+        iframeChecked = false;
+        recordVisit();
+        checkIframes();
+      }
+      if (!recording) {
+        clearTimeout(scrollTimer); // paused / stopped: whatever was pending is not part of the recording
+        scrollTimer = null;
+      }
+      startOverlayPoll();
     }
   });
 
   // On (re)load, ask whether we should be recording. If yes, log the visit.
   function syncState() {
     try {
-      chrome.runtime.sendMessage({ type: "GET_STATE" }, (state) => {
+      chrome.runtime.sendMessage({ type: "OVERLAY_STATE" }, (state) => {
         if (chrome.runtime.lastError || !state) return;
         recording = !!state.recording;
-        if (recording) recordVisit();
+        if (recording) {
+          recordVisit();
+          checkIframes();
+        }
+        // A paused (but still active) recording also needs the overlay, and
+        // `state.recording` alone can't tell that apart from fully stopped
+        // (or from a recording happening in a different tab).
+        if (state.active && state.isThisTab) startOverlayPoll();
       });
     } catch (e) {
       /* ignore */
