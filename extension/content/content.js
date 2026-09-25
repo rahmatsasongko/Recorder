@@ -366,15 +366,104 @@
    * Recorder Engine
    * ---------------------------------------------------------------------- */
 
-  function sendStep(step) {
+  // `el` is the element the step is about, when there is one — it gets the
+  // green "recorded" flash (see confirmStep) once the step is really stored.
+  function sendStep(step, el) {
     // A scroll is only sent once it settles (see onScroll). If the user acts
     // before that, send it first so the steps keep the order things happened.
     if (scrollTimer && step.action !== "scroll") flushScroll();
     try {
-      chrome.runtime.sendMessage({ type: "ADD_STEP", step }, () => void chrome.runtime.lastError);
+      chrome.runtime.sendMessage({ type: "ADD_STEP", step }, (res) => {
+        if (chrome.runtime.lastError) return;
+        // Only a step the background actually stored is worth confirming: a
+        // paused session, another tab and a repeated visit all answer without
+        // adding anything (ok:false / skipped).
+        if (res && res.ok && !res.skipped) confirmStep(step, el, res.count);
+      });
     } catch (e) {
       /* extension context invalidated */
     }
+  }
+
+  /* ---- green flash: proof that an action became a step. The popup closes the
+   * moment the page takes focus, so while recording there is otherwise no way
+   * to tell whether a keystroke or click was captured. The element the step is
+   * about is outlined in green with its step number, and the overlay's step
+   * counter turns green too (that one also covers steps with no element —
+   * visit, scroll). Never shows the step's value: a password stays hidden. ---- */
+  const FLASH_MS = 1400;
+  const FLASH_FADE_MS = 400;
+  const activeFlashes = new Map(); // element -> { box, fade, gone }
+  let counterFlashTimer = null;
+
+  function confirmStep(step, el, count) {
+    flashCounter(count);
+    if (!el || el.nodeType !== 1 || !el.isConnected) return;
+    flashElement(el, "✓ Step " + count + " · " + String(step.action).toUpperCase());
+  }
+
+  function dismissFlash(el) {
+    const f = activeFlashes.get(el);
+    if (!f) return;
+    clearTimeout(f.fade);
+    clearTimeout(f.gone);
+    if (f.box.parentNode) f.box.parentNode.removeChild(f.box);
+    activeFlashes.delete(el);
+  }
+
+  function flashElement(el, label) {
+    const r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return; // not rendered (display:none, detached layout)
+
+    // Same element recorded twice in a row (type, then {enter}): the newer
+    // step replaces the older badge instead of stacking on top of it.
+    dismissFlash(el);
+
+    const box = document.createElement("div");
+    box.className = "cyp-rec-flash";
+    box.style.cssText =
+      "all:initial;display:block;position:fixed;z-index:2147483646;pointer-events:none;" +
+      "box-sizing:border-box;border:2px solid #10b981;border-radius:4px;" +
+      "background:rgba(16,185,129,.22);box-shadow:0 0 0 3px rgba(16,185,129,.35);" +
+      "left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px;height:" + r.height + "px;" +
+      "opacity:1;transition:opacity " + FLASH_FADE_MS + "ms;";
+
+    const tag = document.createElement("div");
+    tag.textContent = label;
+    // Above the element, unless that would fall off the top of the viewport.
+    const below = r.top < 28;
+    tag.style.cssText =
+      // all:initial resets pointer-events too (it is inherited, and initial is
+      // `auto`), so the badge needs its own — or it would eat real clicks.
+      "all:initial;display:block;position:absolute;left:-2px;white-space:nowrap;pointer-events:none;" +
+      (below ? "top:100%;margin-top:5px;" : "bottom:100%;margin-bottom:5px;") +
+      "background:#10b981;color:#fff;padding:3px 8px;border-radius:999px;" +
+      "font:600 11px/1.3 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" +
+      "box-shadow:0 3px 10px rgba(0,0,0,.3);";
+    box.appendChild(tag);
+
+    // On <html>, not <body>: an extra child of <body> would shift the
+    // :nth-of-type / xpath position of the page's own elements.
+    document.documentElement.appendChild(box);
+    activeFlashes.set(el, {
+      box,
+      fade: setTimeout(() => {
+        box.style.opacity = "0";
+      }, FLASH_MS - FLASH_FADE_MS),
+      gone: setTimeout(() => dismissFlash(el), FLASH_MS)
+    });
+  }
+
+  function flashCounter(count) {
+    const span = overlayEl && overlayEl.querySelector('[data-role="steps"]');
+    if (!span) return;
+    span.textContent = count + " langkah";
+    span.style.transition = "color .3s";
+    span.style.color = "#34d399";
+    clearTimeout(counterFlashTimer);
+    counterFlashTimer = setTimeout(() => {
+      span.style.color = "#d1d5db";
+    }, FLASH_MS);
   }
 
   // A field whose value must not end up in generated code or on screen.
@@ -436,6 +525,30 @@
     "input[type=image],summary,[role=button],[role=link]," +
     "[role=tab],[role=menuitem],[onclick]";
 
+  // A click on the inside of something clickable that carries a test-id — the
+  // <span> holding an option's label, the <div> wrapping its icon — is a click
+  // on that something. Recorded as it landed it becomes
+  // `[data-testid="select-option-halte-8204"] span`: longer, tied to the
+  // option's inner markup, and named after whatever text the span happens to
+  // hold rather than after the test-id. The test-id already points at the
+  // thing to click, so the recording points there too.
+  //
+  // Only the NEAREST test-id ancestor is considered, and only when it is
+  // itself clickable — a test-id'd list or dialog that merely contains
+  // clickable things must not swallow clicks meant for what is inside it.
+  const TESTID_HOIST_DEPTH = 6;
+  const CLICKABLE_ROLE = "[role=option],[role=treeitem],[role=radio],[role=checkbox],[role=switch]";
+  function clickableTestIdAncestor(el) {
+    if (firstTestId(el)) return null; // already addressed by its own test-id
+    let anc = el.parentElement;
+    for (let depth = 0; anc && depth < TESTID_HOIST_DEPTH; depth++, anc = anc.parentElement) {
+      if (!firstTestId(anc)) continue;
+      const clickable = getComputedStyle(anc).cursor === "pointer" || anc.matches(CLICKABLE_ROLE);
+      return clickable ? anc : null;
+    }
+    return null;
+  }
+
   function onClick(e) {
     if (isOverlayTarget(e.target)) return;
     if (!recording) return;
@@ -487,11 +600,13 @@
       raw.closest(".datepicker, .ui-datepicker, .flatpickr-calendar, .react-datepicker, .mat-calendar");
     if (!el && !inDatePicker) {
       const cursor = raw && getComputedStyle(raw).cursor;
-      if (raw && (cursor === "pointer" || raw.hasAttribute("tabindex"))) el = raw;
+      if (raw && (cursor === "pointer" || raw.hasAttribute("tabindex"))) {
+        el = clickableTestIdAncestor(raw) || raw;
+      }
     }
     if (!el || isFormField(el)) return;
 
-    sendStep({ action: "click", value: null, ...describe(el) });
+    sendStep({ action: "click", value: null, ...describe(el) }, el);
   }
 
   // If the exact element under the cursor already carries its own visible
@@ -509,13 +624,18 @@
 
   // Any text/button/whatever the user picks while assert mode is on — plain
   // text is a valid assertion target, unlike a normal click step.
+  //
+  // "be visible" is the default for everything picked, text or not: it is the
+  // check that says the thing is on screen without freezing its wording, so a
+  // copy tweak doesn't fail the test. The text still rides along in `value`,
+  // so switching the step to "contain text" in the editor is one click and
+  // needs no retyping (a "visible" check ignores it).
   function captureAssertion(raw) {
     const el = resolveAssertTarget(raw);
     const text = normText(el);
-    const assertion =
-      text && text.length <= 160 ? { type: "contain", value: text } : { type: "visible", value: "" };
+    const assertion = { type: "visible", value: text && text.length <= 160 ? text : "" };
     const info = describe(el);
-    sendStep({ action: "assert", value: null, assertion, ...info });
+    sendStep({ action: "assert", value: null, assertion, ...info }, el);
     flashAssertToast(text || info.elementName);
   }
 
@@ -595,37 +715,46 @@
 
     if (el.tagName === "SELECT") {
       const opt = el.options[el.selectedIndex];
-      sendStep({
-        action: "select",
-        value: opt ? opt.text : el.value,
-        ...describe(el)
-      });
+      sendStep(
+        {
+          action: "select",
+          value: opt ? opt.text : el.value,
+          ...describe(el)
+        },
+        el
+      );
       return;
     }
 
     if (el.tagName === "INPUT" && el.type === "file") {
       const names = Array.from(el.files || []).map((f) => f.name);
-      sendStep({
-        action: "upload",
-        value: names.join(", "),
-        files: names,
-        ...describe(el)
-      });
+      sendStep(
+        {
+          action: "upload",
+          value: names.join(", "),
+          files: names,
+          ...describe(el)
+        },
+        el
+      );
       return;
     }
 
     if (el.tagName === "INPUT" && el.type === "checkbox") {
-      sendStep({
-        action: el.checked ? "check" : "uncheck",
-        value: null,
-        ...describe(el)
-      });
+      sendStep(
+        {
+          action: el.checked ? "check" : "uncheck",
+          value: null,
+          ...describe(el)
+        },
+        el
+      );
       return;
     }
 
     if (el.tagName === "INPUT" && el.type === "radio") {
       if (el.checked)
-        sendStep({ action: "check", value: null, ...describe(el) });
+        sendStep({ action: "check", value: null, ...describe(el) }, el);
       return;
     }
 
@@ -639,16 +768,19 @@
       focusValues.set(el, newVal);
 
       if (newVal === "" && oldVal !== "") {
-        sendStep({ action: "clear", value: null, ...describe(el) });
+        sendStep({ action: "clear", value: null, ...describe(el) }, el);
         return;
       }
       if (newVal === oldVal) return;
 
-      sendStep({
-        action: "type",
-        value: newVal,
-        ...describe(el)
-      });
+      sendStep(
+        {
+          action: "type",
+          value: newVal,
+          ...describe(el)
+        },
+        el
+      );
     }
   }
 
@@ -673,10 +805,10 @@
     if (newVal === oldVal) return;
 
     if (newVal === "" && oldVal !== "") {
-      sendStep({ action: "clear", value: null, ...describe(el) });
+      sendStep({ action: "clear", value: null, ...describe(el) }, el);
       return;
     }
-    sendStep({ action: "type", value: newVal, ...describe(el) });
+    sendStep({ action: "type", value: newVal, ...describe(el) }, el);
   }
 
   const SPECIAL_KEYS = {
@@ -703,17 +835,20 @@
       const newVal = el.value ?? el.textContent ?? "";
       const oldVal = focusValues.get(el);
       if (oldVal !== undefined && newVal !== oldVal && newVal !== "") {
-        sendStep({ action: "type", value: newVal, ...describe(el) });
+        sendStep({ action: "type", value: newVal, ...describe(el) }, el);
         focusValues.set(el, newVal);
       }
     }
 
-    sendStep({
-      action: "keydown",
-      value: mapped,
-      key: e.key,
-      ...describe(el)
-    });
+    sendStep(
+      {
+        action: "keydown",
+        value: mapped,
+        key: e.key,
+        ...describe(el)
+      },
+      el
+    );
   }
 
   /* ------------------------ drag: resize / move / drop ------------------------ *
@@ -834,21 +969,24 @@
       const target = dropTargetUnder(e.clientX, e.clientY, start.el);
       if (target) {
         const t = describe(target);
-        sendStep({
-          action: "drop",
-          value: t.elementName,
-          dx,
-          dy,
-          targetSelector: t.selector,
-          targetSelectorType: t.selectorType,
-          targetSelectorStable: t.selectorStable,
-          targetTagName: t.tagName,
-          targetName: t.elementName,
-          ...describe(start.el)
-        });
+        sendStep(
+          {
+            action: "drop",
+            value: t.elementName,
+            dx,
+            dy,
+            targetSelector: t.selector,
+            targetSelectorType: t.selectorType,
+            targetSelectorStable: t.selectorStable,
+            targetTagName: t.tagName,
+            targetName: t.elementName,
+            ...describe(start.el)
+          },
+          start.el
+        );
         return;
       }
-      sendStep({ action: "drag", value: `${dx},${dy}`, dx, dy, ...describe(start.el) });
+      sendStep({ action: "drag", value: `${dx},${dy}`, dx, dy, ...describe(start.el) }, start.el);
       return;
     }
 
@@ -858,18 +996,21 @@
       const r = start.box.getBoundingClientRect();
       const width = Math.round(r.width);
       const height = Math.round(r.height);
-      sendStep({
-        action: "resize",
-        value: `${width}x${height}`,
-        dx,
-        dy,
-        width,
-        height,
-        fromWidth: start.w,
-        fromHeight: start.h,
-        ...describe(start.el),
-        elementName: resizeTargetName(start.box)
-      });
+      sendStep(
+        {
+          action: "resize",
+          value: `${width}x${height}`,
+          dx,
+          dy,
+          width,
+          height,
+          fromWidth: start.w,
+          fromHeight: start.h,
+          ...describe(start.el),
+          elementName: resizeTargetName(start.box)
+        },
+        start.box
+      );
     });
   }
 
@@ -892,17 +1033,20 @@
     const target = (raw.closest && raw.closest(DROPPABLE_SELECTOR)) || raw;
     lastDragAt = Date.now();
     const t = describe(target);
-    sendStep({
-      action: "drop",
-      value: t.elementName,
-      dnd: "html5",
-      targetSelector: t.selector,
-      targetSelectorType: t.selectorType,
-      targetSelectorStable: t.selectorStable,
-      targetTagName: t.tagName,
-      targetName: t.elementName,
-      ...describe(src)
-    });
+    sendStep(
+      {
+        action: "drop",
+        value: t.elementName,
+        dnd: "html5",
+        targetSelector: t.selector,
+        targetSelectorType: t.selectorType,
+        targetSelectorStable: t.selectorStable,
+        targetTagName: t.tagName,
+        targetName: t.elementName,
+        ...describe(src)
+      },
+      src
+    );
   }
 
   // Only the PAGE scrolling is a step — replay does window.scrollTo(x, y). The
